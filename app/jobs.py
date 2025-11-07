@@ -7,7 +7,8 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from enum import Enum
 from importlib import metadata
-from typing import Any, Awaitable, Callable, Dict, List, Mapping, TypedDict
+import time
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Sequence, TypedDict
 from uuid import uuid4
 
 import hashlib
@@ -18,6 +19,8 @@ import logging
 import httpx
 
 from app.capture import CaptureConfig, CaptureResult, capture_tiles
+from app.ocr_client import OCRRequest, submit_tiles
+from app.stitch import stitch_markdown
 from app.dom_links import extract_links_from_dom, serialize_links
 from app.schemas import JobCreateRequest, ManifestMetadata
 from app.settings import Settings, settings as global_settings
@@ -113,6 +116,7 @@ class JobManager:
         self._event_sequences: Dict[str, int] = {}
         self._event_subscribers: Dict[str, List[asyncio.Queue[dict[str, Any]]]] = {}
         self._webhooks: Dict[str, List[dict[str, Any]]] = {}
+        self._pending_webhooks: Dict[str, List[dict[str, Any]]] = {}
         self._webhook_sender = webhook_sender or _default_webhook_sender
 
     async def create_job(self, request: JobCreateRequest) -> JobSnapshot:
@@ -154,9 +158,9 @@ class JobManager:
     ) -> tuple[list[dict[str, Any]], asyncio.Queue[dict[str, Any]]]:
         if job_id not in self._snapshots:
             raise KeyError(f"Job {job_id} not found")
-        backlog = self.get_events(job_id, since=since)
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._event_subscribers.setdefault(job_id, []).append(queue)
+        backlog = self.get_events(job_id, since=since)
         return backlog, queue
 
     def unsubscribe_events(self, job_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
@@ -169,6 +173,13 @@ class JobManager:
             self._event_subscribers.pop(job_id, None)
 
     async def _run_job(self, *, job_id: str, url: str) -> None:
+        storage = self.store
+        started_at = datetime.now(timezone.utc)
+        storage.allocate_run(job_id=job_id, url=url, started_at=started_at)
+        storage.update_status(job_id=job_id, status=JobState.CAPTURING)
+        pending = self._pending_webhooks.pop(job_id, [])
+        if pending:
+            _persist_pending_webhooks(storage, pending, job_id)
         try:
             self._set_state(job_id, JobState.CAPTURING)
             capture_result, tile_artifacts = await self._runner(job_id=job_id, url=url, store=self.store)
@@ -184,9 +195,11 @@ class JobManager:
             snapshot["artifacts"] = tile_artifacts
             self._broadcast(job_id)
             self._set_state(job_id, JobState.DONE)
+            storage.update_status(job_id=job_id, status=JobState.DONE, finished_at=datetime.now(timezone.utc))
         except Exception as exc:  # pragma: no cover - surfaced to API callers
             self._set_state(job_id, JobState.FAILED)
             self._set_error(job_id, str(exc))
+            storage.update_status(job_id=job_id, status=JobState.FAILED, finished_at=datetime.now(timezone.utc))
             raise
         finally:
             self._tasks.pop(job_id, None)
@@ -242,7 +255,68 @@ class JobManager:
                 msg = f"Unsupported job state '{entry}'"
                 raise ValueError(msg)
             normalized.append(entry)
-        self._webhooks.setdefault(job_id, []).append({"url": url, "events": normalized})
+        entry = {"url": url, "events": normalized}
+        self._webhooks.setdefault(job_id, []).append(entry)
+        try:
+            record = self.store.register_webhook(job_id=job_id, url=url, events=normalized)
+            entry["id"] = record.id
+        except KeyError:
+            self._pending_webhooks.setdefault(job_id, []).append(entry)
+
+    def delete_webhook(self, job_id: str, *, webhook_id: int | None = None, url: str | None = None) -> int:
+        """Remove webhook registrations from persistence + in-memory caches."""
+
+        try:
+            deleted = self.store.delete_webhooks(job_id=job_id, webhook_id=webhook_id, url=url)
+        except KeyError:
+            # If the run has not been allocated yet we may still have in-memory registrations.
+            if job_id not in self._snapshots:
+                raise
+            deleted = 0
+        removed = self._remove_cached_webhooks(job_id, webhook_id=webhook_id, url=url)
+        if deleted or removed:
+            return max(deleted, removed)
+        return 0
+
+    def _remove_cached_webhooks(
+        self,
+        job_id: str,
+        *,
+        webhook_id: int | None = None,
+        url: str | None = None,
+    ) -> int:
+        """Delete webhook entries from in-memory caches and pending queues."""
+
+        removed = self._prune_webhook_entries(self._webhooks, job_id, webhook_id=webhook_id, url=url)
+        pending_removed = self._prune_webhook_entries(
+            self._pending_webhooks, job_id, webhook_id=webhook_id, url=url
+        )
+        return removed or pending_removed
+
+    def _prune_webhook_entries(
+        self,
+        source: Dict[str, List[dict[str, Any]]],
+        job_id: str,
+        *,
+        webhook_id: int | None = None,
+        url: str | None = None,
+    ) -> int:
+        entries = source.get(job_id)
+        if not entries:
+            return 0
+        remaining = [entry for entry in entries if not _webhook_matches(entry, webhook_id, url)]
+        removed = len(entries) - len(remaining)
+        if remaining:
+            source[job_id] = remaining
+        else:
+            source.pop(job_id, None)
+        return removed
+
+    def _persist_pending_webhooks(self, job_id: str) -> None:
+        pending = self._pending_webhooks.pop(job_id, [])
+        if not pending:
+            return
+        _persist_pending_webhooks(self.store, pending, job_id)
 
     def _broadcast(self, job_id: str) -> None:
         payload = self._snapshot_payload(job_id)
@@ -332,15 +406,14 @@ async def execute_capture_job(
     """Run the capture pipeline, persisting artifacts + manifest via ``Store``."""
 
     storage = store or build_store()
-    started_at = datetime.now(timezone.utc)
-    storage.allocate_run(job_id=job_id, url=url, started_at=started_at)
-    storage.update_status(job_id=job_id, status=JobState.CAPTURING)
 
     capture_config = config or CaptureConfig(url=url)
     try:
         capture_result = await capture_tiles(capture_config)
+        markdown, ocr_ms, stitch_ms = await _run_ocr_pipeline(job_id=job_id, capture_result=capture_result)
+        capture_result.manifest.ocr_ms = ocr_ms
+        capture_result.manifest.stitch_ms = stitch_ms
         append_warning_log(job_id=job_id, url=url, manifest=capture_result.manifest)
-        storage.write_manifest(job_id=job_id, manifest=capture_result.manifest)
         dom_snapshot = getattr(capture_result, "dom_snapshot", None)
         dom_path = None
         if dom_snapshot:
@@ -353,11 +426,12 @@ async def execute_capture_job(
             except Exception as exc:  # pragma: no cover - log and continue
                 LOGGER.warning("Failed to extract DOM links for %s: %s", job_id, exc)
         tile_artifacts = storage.write_tiles(job_id=job_id, tiles=capture_result.tiles)
+        storage.write_manifest(job_id=job_id, manifest=capture_result.manifest)
+        if markdown:
+            storage.write_markdown(job_id=job_id, content=markdown)
     except Exception:
-        storage.update_status(job_id=job_id, status=JobState.FAILED, finished_at=datetime.now(timezone.utc))
         raise
 
-    storage.update_status(job_id=job_id, status=JobState.DONE, finished_at=datetime.now(timezone.utc))
     return capture_result, tile_artifacts
 
 
@@ -390,3 +464,41 @@ def build_signed_webhook_sender(secret: str, *, version: str = "v1") -> WebhookS
             LOGGER.warning("Signed webhook delivery to %s failed: %s", url, exc)
 
     return _sender
+
+
+async def _run_ocr_pipeline(*, job_id: str, capture_result: CaptureResult) -> tuple[str, int | None, int | None]:
+    """Submit tiles to olmOCR and stitch the resulting Markdown."""
+
+    tiles = capture_result.tiles
+    if not tiles:
+        return "", None, None
+
+    requests: list[OCRRequest] = [
+        OCRRequest(tile_id=f"{job_id}-tile-{tile.index:04d}", tile_bytes=tile.png_bytes)
+        for tile in tiles
+    ]
+    ocr_start = time.perf_counter()
+    markdown_chunks = await submit_tiles(requests=requests)
+    ocr_ms = int((time.perf_counter() - ocr_start) * 1000)
+
+    stitch_start = time.perf_counter()
+    markdown = stitch_markdown(markdown_chunks)
+    stitch_ms = int((time.perf_counter() - stitch_start) * 1000)
+    return markdown, ocr_ms, stitch_ms
+
+
+def _persist_pending_webhooks(store: Store, pending: Sequence[dict[str, Any]], job_id: str) -> None:
+    for entry in pending:
+        try:
+            record = store.register_webhook(job_id=job_id, url=entry["url"], events=entry["events"])
+            entry["id"] = record.id
+        except KeyError:  # pragma: no cover - should not happen after allocation
+            LOGGER.warning("Skipping webhook persistence for %s; run missing", job_id)
+
+
+def _webhook_matches(entry: dict[str, Any], webhook_id: int | None, url: str | None) -> bool:
+    if url and entry.get("url") == url:
+        return True
+    if webhook_id is not None and entry.get("id") == webhook_id:
+        return True
+    return False

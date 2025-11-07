@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.embeddings import EMBEDDING_DIM
 
@@ -147,3 +148,24 @@ class WebhookRegistrationRequest(BaseModel):
         default=None,
         description="States that should trigger the webhook (defaults to DONE/FAILED)",
     )
+
+
+class WebhookSubscription(BaseModel):
+    """Persisted webhook metadata returned by the API."""
+
+    url: str
+    events: list[str]
+    created_at: datetime
+
+
+class WebhookDeleteRequest(BaseModel):
+    """Request body for deleting webhook registrations."""
+
+    id: int | None = Field(default=None, description="Webhook record ID to delete")
+    url: str | None = Field(default=None, description="Webhook URL to delete")
+
+    @model_validator(mode="after")
+    def _require_selector(self) -> WebhookDeleteRequest:
+        if self.id is None and not self.url:
+            raise ValueError("Provide id or url to delete a webhook")
+        return self

@@ -1,0 +1,3 @@
+PLAN §22 note landed (2025-11-08, bd-h2m/3pr/a2e):
+- scripts/show_latest_smoke.py now documents `--manifest --metrics --weekly --limit 5 --json` plus `MDWB_SMOKE_ROOT/--root`, and the new `check` command for CI health.
+- Status line included: `_2025-11-08 — BlueHill (bd-h2m/3pr/a2e) added the weekly view + MDWB_SMOKE_ROOT/--root override, JSON output, and check command so ops can inspect or validate summary/manifest/weekly data from one CLI invocation._`

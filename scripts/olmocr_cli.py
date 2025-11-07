@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 import httpx
 import typer
@@ -87,7 +87,7 @@ def _config_value(
 
 
 def _required_config(
-    config: DecoupleConfig,
+    config: DecoupleConfig | Any,
     name: str,
     *,
     default: Optional[str] = None,

@@ -18,12 +18,21 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 from rich.console import Console
 from rich.table import Table
 
+_TyperOptionInfo: Any | None
+_TyperOptionInfo: Any = None
+try:  # pragma: no cover - typer internals
+    from typer.models import OptionInfo as _TyperOptionInfo
+except ImportError:  # pragma: no cover - fallback when typer internals move
+    pass
+
 console = Console()
 cli = typer.Typer(help="Interact with the Markdown Web Browser API")
 demo_cli = typer.Typer(help="Demo commands hitting the built-in /jobs/demo endpoints.")
 cli.add_typer(demo_cli, name="demo")
 jobs_cli = typer.Typer(help="Job utilities (events/watch).")
 cli.add_typer(jobs_cli, name="jobs")
+jobs_webhooks_cli = typer.Typer(help="Manage job webhooks.")
+jobs_cli.add_typer(jobs_webhooks_cli, name="webhooks")
 warnings_cli = typer.Typer(help="Warning/blocklist log helpers.")
 cli.add_typer(warnings_cli, name="warnings")
 
@@ -84,6 +93,20 @@ def _print_links(links: Iterable[dict]) -> None:
     table = Table("Text", "Href", "Source", "Δ", title="Links")
     for row in links:
         table.add_row(row.get("text", ""), row.get("href", ""), row.get("source", ""), row.get("delta", ""))
+    console.print(table)
+
+
+def _print_webhooks(records: Iterable[dict[str, Any]]) -> None:
+    rows = list(records)
+    if not rows:
+        console.print("[dim]No webhooks registered yet.[/]")
+        return
+    table = Table("URL", "Events", "Created", title="Webhooks")
+    for row in rows:
+        events = row.get("events") or []
+        pretty_events = ", ".join(events) if events else "DONE, FAILED"
+        created = row.get("created_at", "—")
+        table.add_row(str(row.get("url", "—")), pretty_events, str(created))
     console.print(table)
 
 
@@ -204,6 +227,22 @@ def _render_snapshot(snapshot: dict[str, Any]) -> None:
         warnings = manifest.get("warnings")
         if warnings:
             _log_event("warnings", json.dumps(warnings))
+        blocklist_hits = manifest.get("blocklist_hits")
+        if blocklist_hits:
+            blocklist_summary = _format_blocklist(blocklist_hits)
+            if blocklist_summary != "-":
+                _log_event("log", f"blocklist: {blocklist_summary}")
+        sweep_summary = _format_sweep_summary(
+            {
+                "sweep_stats": manifest.get("sweep_stats"),
+                "overlap_match_ratio": manifest.get("overlap_match_ratio"),
+            }
+        )
+        if sweep_summary != "-":
+            _log_event("log", f"sweep: {sweep_summary}")
+        validation_summary = _format_validation_summary(manifest.get("validation_failures"))
+        if validation_summary != "-":
+            _log_event("log", f"validation: {validation_summary}")
     error = snapshot.get("error")
     if error:
         _log_event("log", json.dumps({"error": error}))
@@ -226,7 +265,7 @@ def fetch(
     if profile:
         payload["profile_id"] = profile
     if ocr_policy:
-        payload["ocr_policy"] = ocr_policy
+        payload["ocr"] = {"policy": ocr_policy}
 
     response = client.post("/jobs", json=payload)
     response.raise_for_status()
@@ -363,12 +402,64 @@ def demo_links(
 def _log_event(event: str, payload: str) -> None:
     if event == "state":
         console.print(f"[cyan]{payload}[/]")
-    elif event == "progress":
+        return
+    if event == "progress":
         console.print(f"[magenta]{payload}[/]")
-    elif event in {"warning", "warnings"}:
+        return
+    if event in {"warning", "warnings"}:
         console.print(f"[red]warning[/]: {payload}")
-    else:
-        console.print(f"[bold]{event}[/]: {payload}")
+        return
+    if event == "blocklist":
+        data = _parse_json_payload(payload)
+        if isinstance(data, dict):
+            summary = ", ".join(f"{sel}:{count}" for sel, count in data.items()) or "no hits"
+            console.print(f"[yellow]blocklist[/]: {summary}")
+            return
+    if event == "sweep":
+        data = _parse_json_payload(payload) or {}
+        stats = data.get("sweep_stats") or {}
+        ratio = data.get("overlap_match_ratio")
+        parts = []
+        if ratio is not None:
+            parts.append(f"ratio {float(ratio):.2f}")
+        if stats.get("shrink_events"):
+            parts.append(f"shrink {stats['shrink_events']}")
+        if stats.get("retry_attempts"):
+            parts.append(f"retries {stats['retry_attempts']}")
+        summary = ", ".join(parts) or "no sweep data"
+        console.print(f"[blue]sweep[/]: {summary}")
+        return
+    if event == "validation":
+        data = _parse_json_payload(payload)
+        if isinstance(data, list) and data:
+            console.print(f"[red]validation[/]: {'; '.join(map(str, data))}")
+            return
+        console.print("[green]validation[/]: none")
+        return
+    console.print(f"[bold]{event}[/]: {payload}")
+
+
+def _extract_detail(response) -> str | None:  # noqa: ANN001
+    try:
+        data = response.json()
+    except Exception:  # pragma: no cover - defensive
+        return getattr(response, "text", None)
+    if isinstance(data, dict):
+        return data.get("detail") or data.get("error")
+    return getattr(response, "text", None)
+
+
+def _option_value(value):  # noqa: ANN001
+    if _TyperOptionInfo and isinstance(value, _TyperOptionInfo):
+        return value.default
+    return value
+
+
+def _parse_json_payload(payload: str) -> Any:
+    try:
+        return json.loads(payload)
+    except Exception:  # pragma: no cover - best effort
+        return None
 
 
 def _cursor_from_line(line: str, fallback: str | None) -> str | None:
@@ -491,11 +582,27 @@ def _format_validation_summary(values: Any) -> str:
 
 
 def _follow_warning_log(path: Path, *, json_output: bool, interval: float) -> None:
-    with path.open("r", encoding="utf-8") as handle:
-        handle.seek(0, os.SEEK_END)
+    handle: TextIO | None = None
+    last_inode: int | None = None
+    try:
         while True:
+            if handle is None:
+                try:
+                    handle = path.open("r", encoding="utf-8")
+                    handle.seek(0, os.SEEK_END)
+                    last_inode = os.fstat(handle.fileno()).st_ino
+                    console.print(f"[dim]Now tailing {path}…[/]")
+                except FileNotFoundError:
+                    console.print(f"[dim]{path} not found; waiting…[/]")
+                    time.sleep(interval)
+                    continue
             line = handle.readline()
             if not line:
+                if _log_rotated_or_truncated(handle, path, last_inode):
+                    handle.close()
+                    handle = None
+                    last_inode = None
+                    continue
                 time.sleep(interval)
                 continue
             line = line.strip()
@@ -506,6 +613,28 @@ def _follow_warning_log(path: Path, *, json_output: bool, interval: float) -> No
             except json.JSONDecodeError:
                 continue
             _print_warning_records([record], json_output=json_output)
+    finally:
+        if handle:
+            handle.close()
+
+
+def _log_rotated_or_truncated(handle: TextIO, path: Path, last_inode: int | None) -> bool:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        console.print(f"[dim]{path} removed; waiting for recreation…[/]")
+        return True
+    try:
+        current_pos = handle.tell()
+    except (OSError, ValueError):
+        return True
+    if stat.st_size < current_pos:
+        console.print(f"[dim]{path} truncated; reopening…[/]")
+        return True
+    if last_inode is not None and stat.st_ino != last_inode:
+        console.print(f"[dim]{path} rotated; reopening…[/]")
+        return True
+    return False
 
 
 @demo_cli.command("stream")
@@ -545,12 +674,11 @@ def warnings_tail(
 
     settings = _resolve_settings(None)
     target_path = log_path or settings.warning_log_path
-    if not target_path.exists():
+    if target_path.exists():
+        records = _load_warning_records(target_path, count)
+        _print_warning_records(records, json_output=json_output)
+    else:
         console.print(f"[yellow]Warning log not found at {target_path}[/]")
-        return
-
-    records = _load_warning_records(target_path, count)
-    _print_warning_records(records, json_output=json_output)
 
     if follow:
         console.print(f"[dim]Following {target_path} (Ctrl+C to stop)...[/]")
@@ -612,18 +740,92 @@ def dom_links(
         return
     _print_links(data)
  
-@jobs_cli.command("watch")
-def jobs_watch(
+
+
+@jobs_webhooks_cli.command("list")
+def jobs_webhooks_list(
     job_id: str = typer.Argument(..., help="Job identifier"),
     api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
-    since: Optional[str] = typer.Option(None, help="Resume from this ISO timestamp."),
-    interval: float = typer.Option(2.0, "--interval", help="Polling interval (seconds) when following."),
-    follow: bool = typer.Option(True, "--follow/--once", help="Stream continuously (default) or exit after one batch."),
-    output: typer.FileTextWrite = typer.Option(
-        "-", "--output", "-o", help="File to append NDJSON events to (default stdout)."
-    ),
+    json_output: bool = typer.Option(False, "--json", help="Print raw JSON instead of a table."),
 ) -> None:
-    """Continuously tail the `/jobs/{id}/events` NDJSON feed."""
+    """List registered webhooks for a job."""
 
     settings = _resolve_settings(api_base)
-    _watch_job_events(job_id, settings, cursor=since, follow=follow, interval=interval, output=output)
+    client = _client(settings)
+    response = client.get(f"/jobs/{job_id}/webhooks")
+    if response.status_code == 404:
+        console.print(f"[red]Job {job_id} not found.[/]")
+        return
+    response.raise_for_status()
+    data = response.json()
+    if json_output:
+        console.print_json(data=data)
+        return
+    _print_webhooks(data)
+
+
+@jobs_webhooks_cli.command("add")
+def jobs_webhooks_add(
+    job_id: str = typer.Argument(..., help="Job identifier"),
+    url: str = typer.Argument(..., help="Webhook endpoint to invoke on state changes."),
+    api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
+    event: list[str] = typer.Option(
+        None,
+        "--event",
+        "-e",
+        help="Job state to trigger the webhook (repeat flag for multiple states). Defaults to DONE+FAILED.",
+    ),
+) -> None:
+    """Register a webhook for a job."""
+
+    settings = _resolve_settings(api_base)
+    client = _client(settings)
+    payload: dict[str, Any] = {"url": url}
+    if event:
+        payload["events"] = event
+    response = client.post(f"/jobs/{job_id}/webhooks", json=payload)
+    if response.status_code == 404:
+        console.print(f"[red]Job {job_id} not found.[/]")
+        return
+    if response.status_code == 400:
+        detail = response.json().get("detail", response.text)
+        console.print(f"[red]Webhook rejected:[/red] {detail}")
+        return
+    response.raise_for_status()
+    console.print(f"[green]Registered webhook for {job_id} ({url}).[/] Trigger states: {', '.join(event) if event else 'DONE, FAILED'}.")
+
+
+@jobs_webhooks_cli.command("delete")
+def jobs_webhooks_delete(
+    job_id: str = typer.Argument(..., help="Job identifier"),
+    api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
+    webhook_id: Optional[int] = typer.Option(None, "--id", help="Webhook record id"),
+    url: Optional[str] = typer.Option(None, "--url", help="Webhook URL to delete"),
+) -> None:
+    """Remove a webhook subscription from a job."""
+
+    webhook_id = _option_value(webhook_id)
+    url = _option_value(url)
+    if webhook_id is None and not url:
+        raise typer.BadParameter("Provide --id or --url to delete a webhook")
+
+    settings = _resolve_settings(api_base)
+    client = _client(settings)
+    payload: dict[str, Any] = {}
+    if webhook_id is not None:
+        payload["id"] = webhook_id
+    if url:
+        payload["url"] = url
+    response = client.request("DELETE", f"/jobs/{job_id}/webhooks", json=payload)
+    if response.status_code == 404:
+        detail = _extract_detail(response)
+        console.print(f"[red]{detail or 'Webhook or job not found.'}[/]")
+        return
+    if response.status_code == 400:
+        detail = _extract_detail(response)
+        console.print(f"[red]Webhook deletion rejected:[/red] {detail}")
+        return
+    response.raise_for_status()
+    body = response.json()
+    body.get("deleted", body.get("job_id"))
+    console.print(f"[green]Deleted {body.get('deleted', 0)} webhook(s) from {job_id}.[/]")

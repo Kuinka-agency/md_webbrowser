@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from pathlib import Path
+
+
+from scripts import mdwb_cli
+
+API_SETTINGS = mdwb_cli.APISettings(
+    base_url="http://localhost",
+    api_key=None,
+    warning_log_path=Path("ops/warnings.jsonl"),
+)
+
+
+class FakeResponse:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        return None
+
+    def iter_lines(self):  # noqa: D401
+        yield from self._lines
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class FakeClient:
+    def __init__(self, responses: list[FakeResponse]) -> None:
+        self._responses = responses
+        self.calls: list[str | None] = []
+        self.closed = False
+
+    def stream(self, method: str, url: str, params=None):  # noqa: ANN001
+        since = params.get("since") if params else None
+        self.calls.append(since)
+        return self._responses.pop(0)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_cursor_from_line_prefers_top_level_timestamp():
+    base = "2025-11-08T00:00:00+00:00"
+    line = json.dumps({"timestamp": base})
+    bumped = mdwb_cli._cursor_from_line(line, None)
+    assert bumped is not None
+    assert datetime.fromisoformat(bumped) > datetime.fromisoformat(base)
+
+
+def test_cursor_from_line_uses_snapshot_timestamp_when_missing_top_level():
+    base = "2025-11-08T00:00:00+00:00"
+    line = json.dumps({"snapshot": {"timestamp": base}})
+    bumped = mdwb_cli._cursor_from_line(line, None)
+    assert bumped is not None
+    assert datetime.fromisoformat(bumped) > datetime.fromisoformat(base)
+
+
+def test_iter_event_lines_updates_cursor_and_closes_client(monkeypatch):
+    responses = [FakeResponse([json.dumps({"timestamp": "2025-11-08T00:00:00+00:00"})])]
+    fake_client = FakeClient(responses)
+    monkeypatch.setattr(mdwb_cli, "_client", lambda settings: fake_client)
+    monkeypatch.setattr(mdwb_cli.time, "sleep", lambda _: None)
+
+    lines = list(
+        mdwb_cli._iter_event_lines(
+            "job123",
+            API_SETTINGS,
+            cursor=None,
+            follow=False,
+            interval=0.1,
+        )
+    )
+
+    assert lines == [json.dumps({"timestamp": "2025-11-08T00:00:00+00:00"})]
+    assert fake_client.calls == [None]
+    assert fake_client.closed
+
+
+def test_watch_job_events_pretty_renders_snapshot(monkeypatch):
+    events = [
+        json.dumps(
+            {
+                "snapshot": {
+                    "state": "BROWSER_STARTING",
+                    "progress": {"done": 0, "total": 2},
+                }
+            }
+        ),
+        json.dumps(
+            {
+                "snapshot": {
+                    "state": "DONE",
+                    "progress": {"done": 2, "total": 2},
+                }
+            }
+        ),
+    ]
+
+    monkeypatch.setattr(mdwb_cli, "_iter_event_lines", lambda *_, **__: iter(events))
+    with mdwb_cli.console.capture() as capture:
+        mdwb_cli._watch_job_events_pretty(
+            "job123",
+            API_SETTINGS,
+            cursor=None,
+            follow=True,
+            interval=0.1,
+            raw=False,
+        )
+    output = capture.get()
+    assert "BROWSER_STARTING" in output
+    assert "DONE" in output
+
+
+def test_log_event_formats_blocklist_and_sweep():
+    with mdwb_cli.console.capture() as capture:
+        mdwb_cli._log_event("blocklist", "{\"#cookie\":2}")
+        mdwb_cli._log_event("sweep", "{\"sweep_stats\":{\"shrink_events\":1},\"overlap_match_ratio\":0.92}")
+        mdwb_cli._log_event("validation", "[\"Tile checksum mismatch\"]")
+    output = capture.get()
+    assert "#cookie:2" in output
+    assert "ratio 0.92" in output
+    assert "Tile checksum mismatch" in output

@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import types
 from datetime import datetime
+from typing import cast
 from pathlib import Path
+
+from dataclasses import dataclass
 
 import pytest
 
@@ -11,13 +15,63 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:  # pragma: no cover
     sys.path.append(str(ROOT))
 
+if "pyvips" not in sys.modules:
+    pyvips_stub = types.ModuleType("pyvips")
+    pyvips_stub.Image = object  # type: ignore[attr-defined]
+    sys.modules["pyvips"] = pyvips_stub
+
 try:
     from app.capture import CaptureManifest, CaptureResult, ScrollPolicy, SweepStats  # noqa: E402
-    from app.jobs import JobManager, JobState  # noqa: E402
-    from app.schemas import JobCreateRequest  # noqa: E402
-    from app.store import StorageConfig, Store  # noqa: E402
-except OSError as exc:  # pyvips missing in CI
-    pytest.skip(f"capture dependencies unavailable: {exc}", allow_module_level=True)
+except OSError:  # pyvips missing in CI
+    @dataclass
+    class ScrollPolicy:  # type: ignore[override]
+        settle_ms: int
+        max_steps: int
+        viewport_overlap_px: int
+        viewport_step_px: int
+
+    @dataclass
+    class SweepStats:  # type: ignore[override]
+        sweep_count: int
+        total_scroll_height: int
+        shrink_events: int
+        retry_attempts: int
+        overlap_pairs: int
+        overlap_match_ratio: float
+
+    @dataclass
+    class CaptureManifest:  # type: ignore[override]
+        url: str
+        cft_label: str
+        cft_version: str
+        playwright_channel: str
+        playwright_version: str
+        browser_transport: str
+        screenshot_style_hash: str
+        viewport_width: int
+        viewport_height: int
+        device_scale_factor: int
+        long_side_px: int
+        capture_ms: int
+        tiles_total: int
+        scroll_policy: ScrollPolicy
+        sweep_stats: SweepStats
+        user_agent: str
+        shrink_retry_limit: int
+        blocklist_version: str
+        blocklist_hits: dict
+        warnings: list
+        overlap_match_ratio: float
+        validation_failures: list
+
+    @dataclass
+    class CaptureResult:  # type: ignore[override]
+        tiles: list
+        manifest: CaptureManifest
+
+from app.jobs import JobManager, JobState  # noqa: E402
+from app.schemas import JobCreateRequest  # noqa: E402
+from app.store import StorageConfig, Store  # noqa: E402
 
 
 async def _fake_runner(*, job_id: str, url: str, store: Store, config=None):  # noqa: ANN001
@@ -158,6 +212,28 @@ async def test_job_manager_events_sequence_filter(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_job_manager_subscribe_events_stream(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    manager = JobManager(store=Store(config), runner=_fake_runner)
+    snapshot = await manager.create_job(JobCreateRequest(url="https://example.com/sub"))
+    job_id = snapshot["id"]
+
+    await manager._tasks[job_id]
+    backlog, queue = manager.subscribe_events(job_id)
+    try:
+        assert backlog, "Expected backlog events to replay"
+        last_sequence = backlog[-1]["sequence"]
+
+        manager._set_state(job_id, JobState.NAVIGATING)
+        event = await asyncio.wait_for(queue.get(), timeout=1)
+
+        assert event["snapshot"]["state"] == JobState.NAVIGATING.value
+        assert event["sequence"] > last_sequence
+    finally:
+        manager.unsubscribe_events(job_id, queue)
+
+
+@pytest.mark.asyncio
 async def test_job_manager_webhook_delivery(tmp_path: Path):
     config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
     sent: list[dict] = []
@@ -175,3 +251,98 @@ async def test_job_manager_webhook_delivery(tmp_path: Path):
 
     assert sent, "webhook sender should be invoked"
     assert sent[-1]["payload"]["state"] == JobState.DONE.value
+
+
+@pytest.mark.asyncio
+async def test_register_webhook_persists_to_store(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    store = Store(config)
+    manager = JobManager(store=store, runner=_fake_runner)
+    snapshot = await manager.create_job(JobCreateRequest(url="https://example.com/web"))
+    job_id = snapshot["id"]
+    await manager._tasks[job_id]
+
+    manager.register_webhook(job_id, url="https://example.com/hook", events=[JobState.DONE.value])
+
+    records = store.list_webhooks(job_id)
+    assert len(records) == 1
+    assert records[0].url == "https://example.com/hook"
+    assert records[0].events == [JobState.DONE.value]
+
+
+@pytest.mark.asyncio
+async def test_delete_webhook_removes_from_store(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    store = Store(config)
+    manager = JobManager(store=store, runner=_fake_runner)
+    snapshot = await manager.create_job(JobCreateRequest(url="https://example.com/web"))
+    job_id = snapshot["id"]
+    await manager._tasks[job_id]
+    manager.register_webhook(job_id, url="https://example.com/hook", events=[JobState.DONE.value])
+    records = store.list_webhooks(job_id)
+    assert records
+    deleted = manager.delete_webhook(job_id, url="https://example.com/hook")
+    assert deleted == 1
+    assert store.list_webhooks(job_id) == []
+
+
+@pytest.mark.asyncio
+async def test_delete_webhook_after_job_cleanup(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    store = Store(config)
+    manager = JobManager(store=store, runner=_fake_runner)
+    snapshot = await manager.create_job(JobCreateRequest(url="https://example.com/web"))
+    job_id = snapshot["id"]
+    await manager._tasks[job_id]
+    manager.register_webhook(job_id, url="https://example.com/hook", events=[JobState.DONE.value])
+    # simulate job cleanup (no snapshot in memory)
+    manager._snapshots.pop(job_id, None)
+    deleted = manager.delete_webhook(job_id, url="https://example.com/hook")
+    assert deleted == 1
+    assert store.list_webhooks(job_id) == []
+
+
+def test_delete_webhook_removes_records(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    store = Store(config)
+    job_id = "job-cleanup"
+    store.allocate_run(job_id=job_id, url="https://example.com", started_at=datetime.now())
+    store.register_webhook(job_id=job_id, url="https://example.com/webhook", events=["DONE"])
+
+    deleted = store.delete_webhook(job_id, url="https://example.com/webhook")
+
+    assert deleted == 1
+    assert store.list_webhooks(job_id) == []
+
+
+class _DeleteStubStore:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int | None, str | None]] = []
+
+    def delete_webhooks(self, *, job_id: str, webhook_id: int | None = None, url: str | None = None) -> int:
+        self.calls.append((job_id, webhook_id, url))
+        raise KeyError("Run not allocated yet")
+
+
+def test_delete_webhook_handles_pending_entries():
+    store = _DeleteStubStore()
+    manager = JobManager(store=cast(Store, store), runner=_fake_runner)
+    job_id = "pending-job"
+    manager._snapshots[job_id] = {"id": job_id, "url": "https://example.com", "state": JobState.CAPTURING}
+    manager._webhooks[job_id] = [{"url": "https://example.com/hook"}]
+    manager._pending_webhooks[job_id] = [{"url": "https://example.com/hook"}]
+
+    deleted = manager.delete_webhook(job_id, url="https://example.com/hook")
+
+    assert deleted == 1
+    assert manager._webhooks.get(job_id) is None
+    assert manager._pending_webhooks.get(job_id) is None
+    assert store.calls == [(job_id, None, "https://example.com/hook")]
+
+
+def test_delete_webhook_unknown_job_propagates_keyerror():
+    store = _DeleteStubStore()
+    manager = JobManager(store=cast(Store, store), runner=_fake_runner)
+
+    with pytest.raises(KeyError):
+        manager.delete_webhook("missing-job", url="https://example.com/hook")

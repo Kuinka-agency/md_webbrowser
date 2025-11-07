@@ -16,8 +16,9 @@ import tarfile
 
 import sqlite_vec
 import zstandard as zstd
-from sqlalchemy import event, text
-from sqlmodel import Field, Session, SQLModel, create_engine
+from sqlalchemy import Column, event, text
+from sqlalchemy.dialects.sqlite import JSON as SQLITE_JSON
+from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from app.tiler import TileSlice
 
@@ -68,6 +69,18 @@ class LinkRecord(SQLModel, table=True):
     text: str
     rel: str | None = None
     source: str = Field(default="dom", description="dom|ocr|hybrid")
+
+
+class WebhookRecord(SQLModel, table=True):
+    """Webhook registrations stored alongside run metadata."""
+
+    __tablename__ = "webhooks"
+
+    id: int | None = Field(default=None, primary_key=True)
+    job_id: str = Field(foreign_key="runs.id")
+    url: str
+    events: list[str] = Field(default_factory=list, sa_column=Column(SQLITE_JSON))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass(frozen=True)
@@ -179,6 +192,76 @@ class Store:
             session.commit()
         return paths
 
+    def register_webhook(self, *, job_id: str, url: str, events: Sequence[str]) -> WebhookRecord:
+        normalized_events = list(events)
+        with self.session() as session:
+            run = session.get(RunRecord, job_id)
+            if not run:
+                raise KeyError(f"Run {job_id} not found")
+            record = WebhookRecord(job_id=job_id, url=url, events=normalized_events)
+            session.add(record)
+            session.commit()
+            session.refresh(record)
+            return record
+
+    def list_webhooks(self, job_id: str) -> list[WebhookRecord]:
+        with self.session() as session:
+            run = session.get(RunRecord, job_id)
+            if not run:
+                raise KeyError(f"Run {job_id} not found")
+            statement = select(WebhookRecord).where(WebhookRecord.job_id == job_id).order_by(WebhookRecord.created_at)
+            return list(session.exec(statement).all())
+
+    def delete_webhooks(
+        self,
+        *,
+        job_id: str,
+        webhook_id: int | None = None,
+        url: str | None = None,
+    ) -> int:
+        if webhook_id is None and not url:
+            raise ValueError("Provide webhook_id or url for deletion")
+        with self.session() as session:
+            run = session.get(RunRecord, job_id)
+            if not run:
+                raise KeyError(f"Run {job_id} not found")
+            statement = select(WebhookRecord).where(WebhookRecord.job_id == job_id)
+            if webhook_id is not None:
+                statement = statement.where(WebhookRecord.id == webhook_id)
+            if url:
+                statement = statement.where(WebhookRecord.url == url)
+            records = list(session.exec(statement))
+            if not records:
+                return 0
+            for record in records:
+                session.delete(record)
+            session.commit()
+            return len(records)
+
+    def delete_webhook(
+        self,
+        job_id: str,
+        *,
+        webhook_id: int | None = None,
+        url: str | None = None,
+    ) -> int:
+        if webhook_id is None and not url:
+            raise ValueError("Provide a webhook id or url to delete")
+        with self.session() as session:
+            run = session.get(RunRecord, job_id)
+            if not run:
+                raise KeyError(f"Run {job_id} not found")
+            statement = select(WebhookRecord).where(WebhookRecord.job_id == job_id)
+            if webhook_id is not None:
+                statement = statement.where(WebhookRecord.id == webhook_id)
+            if url:
+                statement = statement.where(WebhookRecord.url == url)
+            records = session.exec(statement).all()
+            for record in records:
+                session.delete(record)
+            session.commit()
+            return len(records)
+
     def dom_snapshot_path(self, *, job_id: str) -> Path:
         """Return the filesystem path for a run's DOM snapshot."""
 
@@ -267,6 +350,12 @@ class Store:
         paths.links_path.parent.mkdir(parents=True, exist_ok=True)
         paths.links_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return paths.links_path
+
+    def write_markdown(self, *, job_id: str, content: str) -> Path:
+        paths = self._paths_for_job(job_id)
+        paths.markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.markdown_path.write_text(content, encoding="utf-8")
+        return paths.markdown_path
 
     def read_manifest(self, job_id: str) -> dict[str, Any]:
         record = self.fetch_run(job_id)
@@ -482,6 +571,7 @@ def _coerce_state(value: str | Enum) -> str:
 __all__ = [
     "RunRecord",
     "LinkRecord",
+    "WebhookRecord",
     "RunPaths",
     "StorageConfig",
     "Store",

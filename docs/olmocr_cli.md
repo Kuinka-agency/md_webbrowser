@@ -18,7 +18,7 @@ Set these variables in `.env` (mirrors `docs/config.md`):
 | `OLMOCR_SERVER` / `OLMOCR_API_KEY` / `OLMOCR_MODEL` | Remote olmOCR defaults used in every `run`/`bench` invocation. |
 | `TILE_LONG_SIDE_PX` / `TILE_OVERLAP_PX` / `VIEWPORT_OVERLAP_PX` | Capture geometry echoed into manifests. |
 
-Run `uv run scripts/olmocr_cli.py show-env` to confirm config before kicking off captures.
+Run `uv run scripts/olmocr_cli.py show-env` to confirm config before kicking off captures. For GPU-native batches or local vLLM deployments, follow the CUDA 12.6 bootstrap script (`scripts/setup_olmocr_cuda12.sh`) and the extended how-to in `docs/olmocr_cli_tool_documentation.md` (imported from the upstream automation repo) before running the commands below.
 
 ## Commands
 

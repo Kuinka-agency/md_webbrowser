@@ -66,6 +66,14 @@
             <span class="warning-empty">None detected.</span>
           </div>
         </article>
+        <article class="status-card">
+          <p class="status-label">Sweep Health</p>
+          <p class="status-value status-value--multiline" data-sweep-summary>No sweep data yet.</p>
+        </article>
+        <article class="status-card">
+          <p class="status-label">Validation</p>
+          <p class="status-value status-value--multiline" data-validation-summary>No validation issues.</p>
+        </article>
       </section>
 
       <section class="tabs" data-tabs>
@@ -108,10 +116,36 @@
           <article class="tab-panel" data-tab-panel="manifest" hidden>
             <h2>Manifest</h2>
             <pre class="placeholder manifest" data-sse-field="manifest">CfT label, Playwright version, screenshot style hash, and timing metrics will stream into this panel.</pre>
-            <div class="blocklist-panel">
-              <h3>Blocklist Hits</h3>
-              <div class="blocklist-list" data-blocklist-hits>
-                <p class="placeholder">No selectors matched during this run.</p>
+          <div class="blocklist-panel">
+            <h3>Blocklist Hits</h3>
+            <div class="blocklist-list" data-blocklist-hits>
+              <p class="placeholder">No selectors matched during this run.</p>
+            </div>
+          </div>
+          <div class="sweep-panel">
+            <h3>Sweep Stats</h3>
+            <div class="sweep-summary" data-sweep-summary>Sweep data pending…</div>
+            <div class="sweep-list" data-sweep-stats>
+              <p class="placeholder">No sweep data yet.</p>
+            </div>
+          </div>
+          <div class="validation-panel">
+            <h3>Validation Alerts</h3>
+            <div class="validation-summary" data-validation-summary>Waiting for capture…</div>
+            <div class="validation-list" data-validation-list>
+              <p class="placeholder">No validation issues detected.</p>
+            </div>
+          </div>
+            <div class="sweep-panel">
+              <h3>Sweep Stats</h3>
+              <div class="sweep-list" data-sweep-stats>
+                <p class="placeholder">No sweep data yet.</p>
+              </div>
+            </div>
+            <div class="validation-panel">
+              <h3>Validation Failures</h3>
+              <div class="validation-list" data-validation-list>
+                <p class="placeholder">No validation issues detected.</p>
               </div>
             </div>
           </article>

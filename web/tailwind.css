@@ -209,6 +209,12 @@ body {
   font-weight: 600;
 }
 
+.status-value--multiline {
+  font-size: 1rem;
+  line-height: 1.4;
+  min-height: 2.4rem;
+}
+
 .status-value[data-variant="success"] {
   color: #16a34a;
 }
@@ -352,6 +358,47 @@ body {
   gap: 0.35rem;
 }
 
+.sweep-panel,
+.validation-panel {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.75rem;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.sweep-panel h3,
+.validation-panel h3 {
+  margin-bottom: 0.5rem;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.sweep-list,
+.validation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sweep-entry {
+  display: flex;
+  justify-content: space-between;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.sweep-summary,
+.validation-summary {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
 .blocklist-entry {
   display: flex;
   justify-content: space-between;
@@ -364,6 +411,56 @@ body {
 .blocklist-entry__selector {
   color: var(--muted);
   margin-right: 0.75rem;
+}
+
+.sweep-panel,
+.validation-panel {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.75rem;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.sweep-panel h3,
+.validation-panel h3 {
+  margin-bottom: 0.5rem;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.sweep-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sweep-entry {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.35rem 0.4rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  font-size: 0.85rem;
+}
+
+.sweep-entry:last-child {
+  border-bottom: none;
+}
+
+.validation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.validation-list li {
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(15, 23, 42, 0.6);
 }
 
 .event-feed {

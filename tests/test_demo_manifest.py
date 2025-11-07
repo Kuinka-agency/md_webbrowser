@@ -1,4 +1,12 @@
-from app.main import _demo_manifest_payload
+import sys
+import types
+
+if "pyvips" not in sys.modules:
+    pyvips_stub = types.ModuleType("pyvips")
+    pyvips_stub.Image = object  # type: ignore[attr-defined]
+    sys.modules["pyvips"] = pyvips_stub
+
+from app.main import _demo_manifest_payload, _snapshot_events
 
 
 def test_demo_manifest_contains_warnings_and_blocklist():
@@ -13,3 +21,23 @@ def test_demo_manifest_contains_warnings_and_blocklist():
 
     assert hits.get("#onetrust-consent-sdk") == 2
     assert payload.get("blocklist_version")
+
+
+def test_snapshot_events_include_manifest_breadcrumbs():
+    snapshot = {
+        "state": "DONE",
+        "progress": {"done": 2, "total": 2},
+        "manifest": {
+            "warnings": [{"code": "canvas-heavy", "count": 5, "threshold": 3}],
+            "blocklist_hits": {"#cookie": 2},
+            "sweep_stats": {"shrink_events": 1},
+            "overlap_match_ratio": 0.95,
+            "validation_failures": ["Tile checksum mismatch"],
+        },
+    }
+
+    events = dict(_snapshot_events(snapshot))
+
+    assert "blocklist" in events
+    assert "sweep" in events
+    assert "validation" in events

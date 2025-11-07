@@ -53,6 +53,10 @@ function initSseBridge() {
   });
   const warningListEl = root.querySelector('[data-warning-list]');
   const blocklistHitsEl = root.querySelector('[data-blocklist-hits]');
+  const sweepStatsEl = root.querySelector('[data-sweep-stats]');
+  const validationListEl = root.querySelector('[data-validation-list]');
+  const sweepSummaryEl = root.querySelector('[data-sweep-summary]');
+  const validationSummaryEl = root.querySelector('[data-validation-summary]');
 
   const setStatus = (value, variant = 'info') => {
     statusEl.textContent = value;
@@ -66,7 +70,14 @@ function initSseBridge() {
     }
     switch (field) {
       case 'manifest':
-        renderManifest(el, payload, { warningListEl, blocklistHitsEl });
+        renderManifest(el, payload, {
+          warningListEl,
+          blocklistHitsEl,
+          sweepStatsEl,
+          validationListEl,
+          sweepSummaryEl,
+          validationSummaryEl,
+        });
         break;
       case 'raw':
         el.textContent = payload;
@@ -173,7 +184,18 @@ function initSseBridge() {
   return { connect, refreshLinks };
 }
 
-function renderManifest(element, payload, { warningListEl, blocklistHitsEl }) {
+function renderManifest(
+  element,
+  payload,
+  {
+    warningListEl,
+    blocklistHitsEl,
+    sweepStatsEl,
+    validationListEl,
+    sweepSummaryEl,
+    validationSummaryEl,
+  },
+) {
   if (!element) {
     return;
   }
@@ -199,6 +221,10 @@ function renderManifest(element, payload, { warningListEl, blocklistHitsEl }) {
   if (parsedPayload?.blocklist_hits) {
     renderBlocklistHits(blocklistHitsEl, parsedPayload.blocklist_hits);
   }
+  renderSweepStats(sweepStatsEl, parsedPayload);
+  renderValidationFailures(validationListEl, parsedPayload?.validation_failures);
+  updateSweepSummary(sweepSummaryEl, parsedPayload);
+  updateValidationSummary(validationSummaryEl, parsedPayload?.validation_failures);
   element.textContent = formatted;
 }
 
@@ -361,6 +387,116 @@ function renderBlocklistHits(container, payload) {
     row.append(left, right);
     container.appendChild(row);
   });
+}
+
+function renderSweepStats(container, manifest) {
+  if (!container) {
+    return;
+  }
+  container.innerHTML = '';
+  if (!manifest) {
+    container.innerHTML = `<p class="placeholder">No sweep data yet.</p>`;
+    return;
+  }
+  const stats = manifest.sweep_stats || {};
+  const ratio =
+    manifest.overlap_match_ratio ?? stats.overlap_match_ratio ?? null;
+  const entries = [
+    ['Sweeps', stats.sweep_count],
+    ['Shrink events', stats.shrink_events],
+    ['Retries', stats.retry_attempts],
+    ['Overlap pairs', stats.overlap_pairs],
+  ];
+  if (ratio !== null && ratio !== undefined) {
+    entries.push(['Overlap ratio', Number(ratio).toFixed(2)]);
+  }
+  const hasData = entries.some(([, value]) => value !== undefined && value !== null);
+  if (!hasData) {
+    container.innerHTML = `<p class="placeholder">No sweep data yet.</p>`;
+    return;
+  }
+  entries.forEach(([label, value]) => {
+    const row = document.createElement('div');
+    row.className = 'sweep-entry';
+    const left = document.createElement('span');
+    left.textContent = label;
+    const right = document.createElement('strong');
+    right.textContent =
+      value === undefined || value === null ? '—' : value.toString();
+    row.append(left, right);
+    container.appendChild(row);
+  });
+}
+
+function renderValidationFailures(container, payload) {
+  if (!container) {
+    return;
+  }
+  container.innerHTML = '';
+  if (!Array.isArray(payload) || !payload.length) {
+    const p = document.createElement('p');
+    p.className = 'placeholder';
+    p.textContent = 'No validation issues detected.';
+    container.appendChild(p);
+    return;
+  }
+  const list = document.createElement('ul');
+  list.className = 'validation-list';
+  payload.forEach((entry) => {
+    const item = document.createElement('li');
+    item.textContent = entry;
+    list.appendChild(item);
+  });
+  container.appendChild(list);
+}
+
+function updateSweepSummary(element, manifest) {
+  if (!element) {
+    return;
+  }
+  if (!manifest) {
+    element.textContent = 'No sweep data yet.';
+    return;
+  }
+  const stats = manifest.sweep_stats || {};
+  const ratio =
+    manifest.overlap_match_ratio ?? stats.overlap_match_ratio ?? null;
+  const shrink = stats.shrink_events ?? 0;
+  const retries = stats.retry_attempts ?? 0;
+  if (
+    shrink === undefined &&
+    retries === undefined &&
+    (ratio === null || ratio === undefined)
+  ) {
+    element.textContent = 'No sweep data yet.';
+    return;
+  }
+  const parts = [];
+  if (ratio !== null && ratio !== undefined) {
+    parts.push(`ratio ${Number(ratio).toFixed(2)}`);
+  }
+  if (shrink) {
+    parts.push(`shrink ${shrink}`);
+  }
+  if (retries) {
+    parts.push(`retries ${retries}`);
+  }
+  element.textContent = parts.length ? parts.join(' · ') : 'Sweep stable';
+}
+
+function updateValidationSummary(element, payload) {
+  if (!element) {
+    return;
+  }
+  if (!Array.isArray(payload) || payload.length === 0) {
+    element.textContent = 'No validation issues.';
+    return;
+  }
+  if (payload.length === 1) {
+    element.textContent = payload[0];
+    return;
+  }
+  element.textContent = `${payload.length} validation issues`;
 }
 
 function initEmbeddingsPanel(streamRoot) {
@@ -548,6 +684,44 @@ function initEventsPanel(root) {
     }
   };
 
+  const formatEventData = (data) => {
+    if (data === undefined || data === null) {
+      return '';
+    }
+    if (typeof data === 'string') {
+      return data;
+    }
+    try {
+      return JSON.stringify(data);
+    } catch {
+      return String(data);
+    }
+  };
+
+  const appendEventLine = (entry) => {
+    const item = document.createElement('li');
+    const meta = document.createElement('div');
+    meta.className = 'event-feed__meta';
+    meta.textContent = `${formatEventTimestamp(entry.timestamp)} · ${
+      entry.event || 'event'
+    }`;
+    const summary = document.createElement('div');
+    summary.className = 'event-feed__summary';
+    let details = entry.event || 'event';
+    if (entry.data) {
+      const formatted = formatEventData(entry.data);
+      if (formatted) {
+        details += ` · ${formatted}`;
+      }
+    }
+    summary.textContent = details;
+    item.append(meta, summary);
+    logEl.prepend(item);
+    while (logEl.children.length > MAX_EVENT_ROWS) {
+      logEl.removeChild(logEl.lastChild);
+    }
+  };
+
   const handleLine = (line) => {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -561,6 +735,9 @@ function initEventsPanel(root) {
       } else if (entry.snapshot) {
         appendEntry(entry);
         setStatus(`Event ${entry.sequence ?? '—'} received.`, 'success');
+      } else if (entry.event) {
+        appendEventLine(entry);
+        setStatus(`Event ${entry.event}`, 'info');
       }
       if (entry.timestamp) {
         cursor = entry.timestamp;
@@ -696,7 +873,7 @@ function initStreamControls(sse) {
       payload.profile_id = profileSelect.value;
     }
     if (ocrSelect?.value) {
-      payload.ocr_policy = ocrSelect.value;
+      payload.ocr = { policy: ocrSelect.value };
     }
 
     runButton.disabled = true;

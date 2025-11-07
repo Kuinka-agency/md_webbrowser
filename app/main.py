@@ -6,7 +6,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator, cast
+from typing import Any, AsyncIterator, Mapping, cast
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
@@ -21,6 +21,8 @@ from app.schemas import (
     JobSnapshotResponse,
     SectionEmbeddingMatch,
     WebhookRegistrationRequest,
+    WebhookSubscription,
+    WebhookDeleteRequest,
 )
 from app.settings import settings
 from app.store import build_store
@@ -176,6 +178,7 @@ async def job_events(job_id: str, request: Request, since: str | None = None) ->
 
     async def event_generator() -> AsyncIterator[str]:
         heartbeat = 0
+        last_sequence = _extract_sequence(backlog[-1]) if backlog else None
         try:
             for entry in backlog:
                 yield _serialize_log_entry(entry) + "\n"
@@ -183,6 +186,11 @@ async def job_events(job_id: str, request: Request, since: str | None = None) ->
                 try:
                     event_entry = await asyncio.wait_for(queue.get(), timeout=5)
                     heartbeat = 0
+                    sequence = _extract_sequence(event_entry)
+                    if sequence is not None and last_sequence is not None and sequence <= last_sequence:
+                        continue
+                    if sequence is not None:
+                        last_sequence = sequence
                     yield _serialize_log_entry(event_entry) + "\n"
                 except asyncio.TimeoutError:
                     heartbeat += 1
@@ -287,6 +295,33 @@ async def register_webhook(job_id: str, payload: WebhookRegistrationRequest) -> 
     return {"job_id": job_id, "registered": True}
 
 
+@app.get("/jobs/{job_id}/webhooks", response_model=list[WebhookSubscription])
+async def list_webhooks(job_id: str) -> list[WebhookSubscription]:
+    try:
+        records = store.list_webhooks(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    return [
+        WebhookSubscription(url=record.url, events=record.events, created_at=record.created_at)
+        for record in records
+    ]
+
+
+@app.delete("/jobs/{job_id}/webhooks")
+async def delete_webhook(job_id: str, payload: WebhookDeleteRequest) -> dict[str, Any]:
+    if payload.id is None and not payload.url:
+        raise HTTPException(status_code=400, detail="Provide an id or url to delete a webhook")
+    try:
+        deleted = JOB_MANAGER.delete_webhook(job_id, webhook_id=payload.id, url=payload.url)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    return {"job_id": job_id, "deleted": deleted}
+
+
 def _snapshot_events(snapshot: JobSnapshot) -> list[tuple[str, str]]:
     events: list[tuple[str, str]] = []
     state = snapshot.get("state")
@@ -305,6 +340,26 @@ def _snapshot_events(snapshot: JobSnapshot) -> list[tuple[str, str]]:
             warnings = manifest.get("warnings")
             if warnings:
                 events.append(("warnings", json.dumps(warnings)))
+            blocklist_hits = manifest.get("blocklist_hits")
+            if blocklist_hits:
+                events.append(("blocklist", json.dumps(blocklist_hits)))
+            sweep_stats = manifest.get("sweep_stats")
+            overlap_ratio = manifest.get("overlap_match_ratio")
+            if sweep_stats or overlap_ratio is not None:
+                events.append(
+                    (
+                        "sweep",
+                        json.dumps(
+                            {
+                                "sweep_stats": sweep_stats,
+                                "overlap_match_ratio": overlap_ratio,
+                            }
+                        ),
+                    )
+                )
+            validation_failures = manifest.get("validation_failures")
+            if validation_failures:
+                events.append(("validation", json.dumps(validation_failures)))
             environment = manifest.get("environment")
             if isinstance(environment, dict):
                 env_data = cast(dict[str, Any], environment)
@@ -324,6 +379,17 @@ def _serialize_log_entry(entry: dict[str, Any]) -> str:
     payload = entry.copy()
     payload.setdefault("event", "snapshot")
     return json.dumps(payload)
+
+
+def _extract_sequence(entry: Mapping[str, Any]) -> int | None:
+    try:
+        raw = entry.get("sequence") if isinstance(entry, Mapping) else None
+    except AttributeError:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_since(value: str | None) -> datetime | None:

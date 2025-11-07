@@ -17,13 +17,13 @@ print(settings.ocr.server_url)
 
 | Name | Default | Purpose / Manifest Echo |
 | --- | --- | --- |
-| `OLMOCR_SERVER` | `https://ai2endpoints.cirrascale.ai/api` | Remote olmOCR endpoint recorded as `ocr.server_url`. |
-| `OLMOCR_API_KEY` | *(unset)* | API key for hosted olmOCR. Required outside local dev. |
-| `OLMOCR_MODEL` | `olmOCR-2-7B-1025-FP8` | Default OCR policy identifier included in manifests + provenance comments. |
+| `OLMOCR_SERVER` | `https://ai2endpoints.cirrascale.ai/api` | Remote olmOCR endpoint recorded as `ocr.server_url`. Required for `scripts/olmocr_cli.py`. |
+| `OLMOCR_API_KEY` | *(unset)* | API key for hosted olmOCR. Required outside local dev (CLI now enforces this). |
+| `OLMOCR_MODEL` | `olmOCR-2-7B-1025-FP8` | Default OCR policy identifier included in manifests + provenance comments (required by CLI). |
+| `API_BASE_URL` | `http://localhost:8000` | FastAPI base URL consumed by the CLI + automation; the CLI now fails fast if unset. |
+| `MDWB_API_KEY` | *(unset)* | Optional bearer token for `/jobs` HTTP calls (CLI + automation). |
 | `OCR_LOCAL_URL` | *(unset)* | Optional self-hosted olmOCR endpoint; overrides `OLMOCR_SERVER` when set. |
 | `OCR_USE_FP8` | `true` | Whether FP8 inference is enabled; surfaced via `environment.ocr_use_fp8`. |
-| `API_BASE_URL` | `http://localhost:8000` | FastAPI base URL consumed by the CLI + automation; recorded in manifests when replaying jobs. |
-| `MDWB_API_KEY` | *(unset)* | Optional bearer token for `/jobs` HTTP calls (CLI + automation). |
 | `OCR_MIN_CONCURRENCY` | `2` | Minimum OCR concurrency window (`environment.ocr_concurrency.min`). |
 | `OCR_MAX_CONCURRENCY` | `8` | Maximum OCR concurrency window (`environment.ocr_concurrency.max`). Must be ≥ min. |
 | `CACHE_ROOT` | `.cache` | Root directory for content-addressed artifacts (tiles, manifests, tar bundles). |
@@ -44,6 +44,7 @@ print(settings.ocr.server_url)
 | `OVERLAP_WARNING_RATIO` | `0.65` | Minimum acceptable overlap match ratio (0–1); lower ratios trigger `overlap-low`. |
 | `BLOCKLIST_PATH` | `config/blocklist.json` | JSON selectors injected during capture; recorded via `manifest.blocklist_version`. |
 | `WARNING_LOG_PATH` | `ops/warnings.jsonl` | JSONL file that stores capture warning/blocklist incidents. |
+| `MDWB_SMOKE_ROOT` | `benchmarks/production` | Optional override for the smoke pointer directory consumed by `scripts/show_latest_smoke.py`; set when the latest summary/manifest/weekly files live elsewhere (e.g., CI artifacts). |
 | `VIEWPORT_OVERLAP_PX` | `120` | Pixels of overlap between viewport sweeps (Plan §19.2). |
 | `CAPTURE_LONG_SIDE_PX` | `1288` | Tile longest side enforced by pyvips tiler + CLI defaults. |
 | `TILE_OVERLAP_PX` | `120` | Overlap inside the pyvips tiler; must match SSIM stitching heuristics. |

@@ -24,4 +24,5 @@ run_step() {
 
 run_step "ruff check" uv run ruff check --fix --unsafe-fixes
 run_step "ty check" uvx ty check
+run_step "pytest" uv run pytest tests/test_mdwb_cli_events.py tests/test_olmocr_cli_config.py tests/test_check_env.py tests/test_show_latest_smoke.py
 run_step "playwright" uv run playwright test "${PLAYWRIGHT_TARGETS[@]}"

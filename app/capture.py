@@ -82,6 +82,8 @@ class CaptureManifest:
     warnings: list[CaptureWarningEntry]
     overlap_match_ratio: float | None
     validation_failures: list[str]
+    ocr_ms: int | None = None
+    stitch_ms: int | None = None
 
 
 @dataclass(slots=True)
