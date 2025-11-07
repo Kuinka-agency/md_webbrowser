@@ -7,7 +7,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional, TextIO, Tuple
 
 import httpx
 import typer
@@ -19,6 +19,8 @@ console = Console()
 cli = typer.Typer(help="Interact with the Markdown Web Browser API")
 demo_cli = typer.Typer(help="Demo commands hitting the built-in /jobs/demo endpoints.")
 cli.add_typer(demo_cli, name="demo")
+jobs_cli = typer.Typer(help="Job management helpers (events, watch, tooling).")
+cli.add_typer(jobs_cli, name="jobs")
 
 
 @dataclass
@@ -109,6 +111,40 @@ def _stream_job(job_id: str, settings: APISettings, *, raw: bool) -> None:
                     _log_event(event, payload)
 
 
+def _watch_job_events(
+    job_id: str,
+    settings: APISettings,
+    *,
+    cursor: str | None,
+    follow: bool,
+    interval: float,
+    output,
+) -> None:
+    client = _client(settings)
+    try:
+        while True:
+            params: dict[str, str] = {}
+            if cursor:
+                params["since"] = cursor
+            with client.stream("GET", f"/jobs/{job_id}/events", params=params) as response:
+                response.raise_for_status()
+                emitted = 0
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    output.write(line + "\n")
+                    output.flush()
+                    cursor = _cursor_from_line(line, cursor)
+                    emitted += 1
+                if emitted == 0 and not cursor:
+                    console.print("[yellow]No events yet; will retry if following.[/]")
+            if not follow:
+                break
+            time.sleep(interval)
+    finally:
+        client.close()
+
+
 def _stream_events(job_id: str, settings: APISettings, output: typer.FileTextWrite) -> None:
     with httpx.Client(base_url=settings.base_url, timeout=None, headers=_auth_headers(settings)) as client:
         with client.stream("GET", f"/jobs/{job_id}/events") as response:
@@ -164,7 +200,7 @@ def fetch(
     if profile:
         payload["profile_id"] = profile
     if ocr_policy:
-        payload["ocr"] = {"policy": ocr_policy}
+        payload["ocr_policy"] = ocr_policy
 
     response = client.post("/jobs", json=payload)
     response.raise_for_status()
