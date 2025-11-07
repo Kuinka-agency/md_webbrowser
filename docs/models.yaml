@@ -1,0 +1,45 @@
+# OCR Model Policies (load at startup)
+# Each key defines operational constraints for capture/tiling/requests.
+
+olmOCR-2-7B-1025-FP8:
+  provider: "ai2"
+  display_name: "olmOCR 2 (7B, FP8)"
+  long_side_px: 1288
+  fp8_preferred: true
+  max_tiles_in_flight: 8
+  prompt_template: "olmocr_v4"
+  notes: "Default remote model; best quality at ≤1288px longest side."
+  refs:
+    - "hf:ai2-olm/olmOCR-2-7B-1025"  # model card
+    - "ai2:olmocr2-blog"             # release blog
+
+olmOCR-2-7B-1025:
+  provider: "ai2"
+  display_name: "olmOCR 2 (7B, FP16)"
+  long_side_px: 1288
+  fp8_preferred: false
+  max_tiles_in_flight: 6
+  prompt_template: "olmocr_v4"
+
+# Optional alternates (keep disabled by default; parity-tested in benches)
+GOT-OCR-2:
+  provider: "open"         # fill in when wired
+  display_name: "GOT-OCR 2"
+  long_side_px: 1280
+  fp8_preferred: false
+  max_tiles_in_flight: 6
+  prompt_template: "generic_ocr"
+  disabled: true
+  refs:
+    - "paper:got-ocr-2"
+
+TextHawk2:
+  provider: "open"
+  display_name: "TextHawk2"
+  long_side_px: 1280
+  fp8_preferred: false
+  max_tiles_in_flight: 6
+  prompt_template: "generic_ocr"
+  disabled: true
+  refs:
+    - "paper:texthawk2"
