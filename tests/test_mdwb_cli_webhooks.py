@@ -16,7 +16,7 @@ class StubResponse:
         self.text = text
 
     def json(self):  # noqa: ANN001
-        return self._payload
+        return self._payload if self._payload is not None else {}
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
