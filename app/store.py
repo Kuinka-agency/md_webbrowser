@@ -198,10 +198,11 @@ class Store:
             record = session.get(RunRecord, job_id)
             if not record:
                 raise KeyError(f"Run {job_id} not found")
+            manifest_dict = _manifest_to_dict(manifest)
             manifest_path = Path(record.manifest_path)
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-            _apply_manifest_metadata(record, manifest)
+            manifest_path.write_text(json.dumps(manifest_dict, indent=2), encoding="utf-8")
+            _apply_manifest_metadata(record, manifest_dict)
             session.add(record)
             session.commit()
             return manifest_path
@@ -236,6 +237,37 @@ class Store:
 
         return artifacts
 
+    def read_manifest(self, job_id: str) -> dict[str, Any]:
+        record = self.fetch_run(job_id)
+        if not record:
+            raise KeyError(f"Run {job_id} not found")
+        manifest_path = Path(record.manifest_path)
+        if not manifest_path.exists():
+            raise FileNotFoundError(manifest_path)
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    def read_markdown(self, job_id: str) -> str:
+        paths = self._paths_for_job(job_id)
+        if not paths.markdown_path.exists():
+            raise FileNotFoundError(paths.markdown_path)
+        return paths.markdown_path.read_text(encoding="utf-8")
+
+    def read_links(self, job_id: str) -> list[dict[str, Any]]:
+        paths = self._paths_for_job(job_id)
+        if not paths.links_path.exists():
+            return []
+        return json.loads(paths.links_path.read_text(encoding="utf-8"))
+
+    def resolve_artifact(self, job_id: str, relative_path: str) -> Path:
+        paths = self._paths_for_job(job_id)
+        target = (paths.root / relative_path).resolve()
+        root = paths.root.resolve()
+        if not str(target).startswith(str(root)):
+            raise FileNotFoundError(relative_path)
+        if not target.exists():
+            raise FileNotFoundError(target)
+        return target
+
     def insert_links(self, *, job_id: str, links: Iterable[Mapping[str, str]]) -> None:
         records = [
             LinkRecord(
@@ -256,6 +288,14 @@ class Store:
     def fetch_run(self, job_id: str) -> RunRecord | None:
         with self.session() as session:
             return session.get(RunRecord, job_id)
+
+    def _paths_for_job(self, job_id: str) -> RunPaths:
+        record = self.fetch_run(job_id)
+        if not record:
+            raise KeyError(f"Run {job_id} not found")
+        paths = RunPaths.from_record(record)
+        paths.ensure_directories()
+        return paths
 
     def build_bundle(
         self,

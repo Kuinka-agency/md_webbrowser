@@ -1,4 +1,10 @@
 const MAX_EVENT_ROWS = 50;
+const EMBEDDING_DIM = 1536;
+const WARNING_LABELS = {
+  'canvas-heavy': 'Canvas Heavy',
+  'video-heavy': 'Video Heavy',
+  'sticky-chrome': 'Sticky Overlay',
+};
 
 function setupTabs() {
   const tabButtons = Array.from(document.querySelectorAll('[data-tab-target]'));
@@ -37,12 +43,15 @@ function initSseBridge() {
   if (!root || !statusEl) {
     return;
   }
+  const embeddingsPanel = initEmbeddingsPanel(root);
 
   const fieldMap = new Map();
   root.querySelectorAll('[data-sse-field]').forEach((el) => {
     fieldMap.set(el.dataset.sseField, el);
   });
   const logEl = root.querySelector('[data-sse-log]');
+  const warningListEl = root.querySelector('[data-warning-list]');
+  const blocklistHitsEl = root.querySelector('[data-blocklist-hits]');
 
   const setStatus = (value) => {
     statusEl.textContent = value;
@@ -67,7 +76,7 @@ function initSseBridge() {
     }
     switch (field) {
       case 'manifest':
-        el.textContent = formatManifest(payload);
+        renderManifest(el, payload, { warningListEl, blocklistHitsEl });
         break;
       case 'raw':
         el.textContent = payload;
@@ -105,6 +114,8 @@ function initSseBridge() {
     source.addEventListener('links', (event) => updateField('links', event.data));
     source.addEventListener('artifacts', (event) => updateField('artifacts', event.data));
     source.addEventListener('log', (event) => appendLog(event.data));
+    source.addEventListener('warnings', (event) => renderWarnings(warningListEl, event.data));
+    embeddingsPanel?.setJobId(jobId);
   };
 
   const defaultJob = root.dataset.jobId || 'demo';
@@ -119,13 +130,21 @@ function initSseBridge() {
   return { connect };
 }
 
-function formatManifest(raw) {
+function renderManifest(element, payload, { warningListEl, blocklistHitsEl }) {
+  let formatted = payload;
   try {
-    const parsed = JSON.parse(raw);
-    return JSON.stringify(parsed, null, 2);
+    const parsed = JSON.parse(payload);
+    formatted = JSON.stringify(parsed, null, 2);
+    if (parsed?.warnings) {
+      renderWarnings(warningListEl, parsed.warnings);
+    }
+    if (parsed?.blocklist_hits) {
+      renderBlocklistHits(blocklistHitsEl, parsed.blocklist_hits);
+    }
   } catch {
-    return raw;
+    // fall through
   }
+  element.textContent = formatted;
 }
 
 function renderLinks(container, raw) {
@@ -198,6 +217,210 @@ function renderArtifacts(container, raw) {
     li.append(left, right);
     container.appendChild(li);
   });
+}
+
+function renderWarnings(container, payload) {
+  if (!container) {
+    return;
+  }
+  let warnings = payload;
+  if (typeof payload === 'string') {
+    try {
+      warnings = JSON.parse(payload);
+    } catch {
+      warnings = null;
+    }
+  }
+  container.innerHTML = '';
+  if (!Array.isArray(warnings) || warnings.length === 0) {
+    const span = document.createElement('span');
+    span.className = 'warning-empty';
+    span.textContent = 'None detected.';
+    container.appendChild(span);
+    return;
+  }
+  warnings.forEach((warning) => {
+    const pill = document.createElement('div');
+    pill.className = 'warning-pill';
+    const code = document.createElement('span');
+    code.className = 'warning-pill__code';
+    code.textContent = WARNING_LABELS[warning.code] || warning.code;
+    const meta = document.createElement('span');
+    meta.className = 'warning-pill__meta';
+    const count = warning.count ?? '?';
+    const threshold = warning.threshold ?? '?';
+    meta.textContent = `${count} hits (>= ${threshold})`;
+    const message = document.createElement('span');
+    message.textContent = warning.message || '';
+    pill.append(code, meta, message);
+    container.appendChild(pill);
+  });
+}
+
+function renderBlocklistHits(container, payload) {
+  if (!container) {
+    return;
+  }
+  let hits = payload;
+  if (typeof payload === 'string') {
+    try {
+      hits = JSON.parse(payload);
+    } catch {
+      hits = null;
+    }
+  }
+  container.innerHTML = '';
+  if (!hits || !Object.keys(hits).length) {
+    const p = document.createElement('p');
+    p.className = 'placeholder';
+    p.textContent = 'No selectors matched during this run.';
+    container.appendChild(p);
+    return;
+  }
+  Object.entries(hits).forEach(([selector, count]) => {
+    const row = document.createElement('div');
+    row.className = 'blocklist-entry';
+    const left = document.createElement('span');
+    left.className = 'blocklist-entry__selector';
+    left.textContent = selector;
+    const right = document.createElement('strong');
+    right.textContent = count.toString();
+    row.append(left, right);
+    container.appendChild(row);
+  });
+}
+
+function initEmbeddingsPanel(streamRoot) {
+  const panel = document.querySelector('[data-embeddings-panel]');
+  if (!panel) {
+    return null;
+  }
+  const vectorInput = panel.querySelector('[data-embeddings-vector]');
+  const topKInput = panel.querySelector('[data-embeddings-topk]');
+  const runButton = panel.querySelector('[data-embeddings-run]');
+  const demoButton = panel.querySelector('[data-embeddings-demo]');
+  const statusEl = panel.querySelector('[data-embeddings-status]');
+  const resultsEl = panel.querySelector('[data-embeddings-results]');
+  let currentJobId = streamRoot?.dataset.jobId || 'demo';
+
+  const setStatus = (text) => {
+    if (statusEl) {
+      statusEl.textContent = text;
+    }
+  };
+
+  const renderResults = (matches, total) => {
+    if (!resultsEl) {
+      return;
+    }
+    resultsEl.innerHTML = '';
+    if (!matches?.length) {
+      const p = document.createElement('p');
+      p.className = 'placeholder';
+      p.textContent = total ? 'No matches for this vector.' : 'No embeddings available for this job yet.';
+      resultsEl.appendChild(p);
+      return;
+    }
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    ['section', 'tiles', 'similarity', 'distance'].forEach((title) => {
+      const th = document.createElement('th');
+      th.textContent = title.toUpperCase();
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    matches.forEach((match) => {
+      const row = document.createElement('tr');
+      const section = document.createElement('td');
+      section.textContent = match.section_id;
+      const tiles = document.createElement('td');
+      const start = match.tile_start ?? '—';
+      const end = match.tile_end ?? '—';
+      tiles.textContent = `${start} → ${end}`;
+      const similarity = document.createElement('td');
+      similarity.textContent = match.similarity.toFixed(4);
+      const distance = document.createElement('td');
+      distance.textContent = match.distance.toFixed(4);
+      row.append(section, tiles, similarity, distance);
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    resultsEl.appendChild(table);
+  };
+
+  const parseVector = () => {
+    if (!vectorInput) {
+      throw new Error('Vector input not available');
+    }
+    const raw = vectorInput.value.trim();
+    if (!raw) {
+      throw new Error('Provide a JSON array with 1,536 numbers.');
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error('Vector must be valid JSON.');
+    }
+    if (!Array.isArray(parsed) || parsed.length !== EMBEDDING_DIM) {
+      throw new Error(`Vector must contain exactly ${EMBEDDING_DIM} numbers.`);
+    }
+    return parsed;
+  };
+
+  const runSearch = async () => {
+    try {
+      setStatus('Searching…');
+      const vector = parseVector();
+      const topK = Math.min(
+        50,
+        Math.max(1, parseInt(topKInput?.value || '5', 10) || 5),
+      );
+      const jobId = currentJobId || 'demo';
+      const response = await fetch(`/jobs/${encodeURIComponent(jobId)}/embeddings/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vector, top_k: topK }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      renderResults(data.matches, data.total_sections);
+      setStatus(`Found ${data.matches.length} of ${data.total_sections} sections for job ${jobId}.`);
+    } catch (error) {
+      console.error('Embeddings search failed', error);
+      setStatus(error.message || 'Search failed');
+    }
+  };
+
+  const buildDemoVector = () => {
+    const vec = Array(EMBEDDING_DIM).fill(0);
+    vec[0] = 1;
+    vec[1] = 0.5;
+    return vec;
+  };
+
+  runButton?.addEventListener('click', runSearch);
+  demoButton?.addEventListener('click', () => {
+    if (!vectorInput) {
+      return;
+    }
+    vectorInput.value = JSON.stringify(buildDemoVector());
+    setStatus('Demo vector loaded. Adjust as needed, then click Search.');
+  });
+
+  const setJobId = (jobId) => {
+    currentJobId = jobId || 'demo';
+    setStatus(`Ready to query embeddings for job ${currentJobId}.`);
+  };
+
+  setJobId(currentJobId);
+  return { setJobId };
 }
 
 function initStreamControls(sse) {

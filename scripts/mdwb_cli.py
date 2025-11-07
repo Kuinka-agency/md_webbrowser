@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import json
-from typing import Iterable, Tuple
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Optional, Tuple
 
 import httpx
 import typer
+from decouple import Config as DecoupleConfig, RepositoryEnv
 from rich.console import Console
 from rich.table import Table
 
@@ -17,9 +20,44 @@ demo_cli = typer.Typer(help="Demo commands hitting the built-in /jobs/demo endpo
 cli.add_typer(demo_cli, name="demo")
 
 
-def _client(api_base: str, http2: bool = True) -> httpx.Client:
+@dataclass
+class APISettings:
+    base_url: str
+    api_key: Optional[str]
+
+
+def _load_env_settings() -> APISettings:
+    env_path = Path(".env")
+    if env_path.exists():
+        config = DecoupleConfig(RepositoryEnv(str(env_path)))
+        base_url = config("API_BASE_URL", default="http://localhost:8000")
+        api_key = config("MDWB_API_KEY", default=None)
+        return APISettings(base_url=base_url, api_key=api_key)
+    return APISettings(base_url="http://localhost:8000", api_key=None)
+
+
+def _resolve_settings(override_base: Optional[str]) -> APISettings:
+    settings = _load_env_settings()
+    if override_base:
+        settings.base_url = override_base
+    return settings
+
+
+def _auth_headers(settings: APISettings) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if settings.api_key:
+        headers["Authorization"] = f"Bearer {settings.api_key}"
+    return headers
+
+
+def _client(settings: APISettings, http2: bool = True) -> httpx.Client:
     timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
-    return httpx.Client(base_url=api_base, timeout=timeout, http2=http2)
+    return httpx.Client(
+        base_url=settings.base_url,
+        timeout=timeout,
+        http2=http2,
+        headers=_auth_headers(settings),
+    )
 
 
 def _print_job(job: dict) -> None:
@@ -68,12 +106,13 @@ def fetch(url: str = typer.Argument(..., help="URL to capture")) -> None:
 
 @demo_cli.command("snapshot")
 def demo_snapshot(
-    api_base: str = typer.Option("http://localhost:8000", help="API base URL"),
+    api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
     json_output: bool = typer.Option(False, "--json", help="Print raw JSON instead of tables."),
 ) -> None:
     """Fetch the demo job snapshot from /jobs/demo."""
 
-    client = _client(api_base)
+    settings = _resolve_settings(api_base)
+    client = _client(settings)
     response = client.get("/jobs/demo")
     response.raise_for_status()
     data = response.json()
@@ -87,12 +126,13 @@ def demo_snapshot(
 
 @demo_cli.command("links")
 def demo_links(
-    api_base: str = typer.Option("http://localhost:8000", help="API base URL"),
+    api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
     json_output: bool = typer.Option(False, "--json", help="Print raw JSON."),
 ) -> None:
     """Fetch the demo links JSON."""
 
-    client = _client(api_base)
+    settings = _resolve_settings(api_base)
+    client = _client(settings)
     response = client.get("/jobs/demo/links.json")
     response.raise_for_status()
     data = response.json()
@@ -113,12 +153,13 @@ def _log_event(event: str, payload: str) -> None:
 
 @demo_cli.command("stream")
 def demo_stream(
-    api_base: str = typer.Option("http://localhost:8000", help="API base URL"),
+    api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
     raw: bool = typer.Option(False, "--raw", help="Print raw event payloads instead of colored labels."),
 ) -> None:
     """Tail the demo SSE stream."""
 
-    with httpx.Client(base_url=api_base, timeout=None) as client:
+    settings = _resolve_settings(api_base)
+    with httpx.Client(base_url=settings.base_url, timeout=None, headers=_auth_headers(settings)) as client:
         with client.stream("GET", "/jobs/demo/stream") as response:
             response.raise_for_status()
             for event, payload in _iter_sse(response):
@@ -129,7 +170,7 @@ def demo_stream(
 
 
 @demo_cli.command("watch")
-def demo_watch(api_base: str = typer.Option("http://localhost:8000", help="API base URL")) -> None:
+def demo_watch(api_base: Optional[str] = typer.Option(None, help="Override API base URL")) -> None:
     """Convenience alias for `demo stream`."""
 
     demo_stream(api_base=api_base)
@@ -137,7 +178,7 @@ def demo_watch(api_base: str = typer.Option("http://localhost:8000", help="API b
 
 @demo_cli.command("events")
 def demo_events(
-    api_base: str = typer.Option("http://localhost:8000", help="API base URL"),
+    api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
     output: typer.FileTextWrite = typer.Option(
         "-", "--output", "-o", help="File to append JSON events to (default stdout)."
     ),
@@ -146,7 +187,8 @@ def demo_events(
 
     import json as jsonlib
 
-    with httpx.Client(base_url=api_base, timeout=None) as client:
+    settings = _resolve_settings(api_base)
+    with httpx.Client(base_url=settings.base_url, timeout=None, headers=_auth_headers(settings)) as client:
         with client.stream("GET", "/jobs/demo/stream") as response:
             response.raise_for_status()
             for event, payload in _iter_sse(response):

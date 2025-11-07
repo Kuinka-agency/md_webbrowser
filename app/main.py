@@ -5,15 +5,18 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from app.dom_links import blend_dom_with_ocr, demo_dom_links, demo_ocr_links, serialize_links
+from app.jobs import JobManager, JobSnapshot, JobState
 from app.schemas import (
     EmbeddingSearchRequest,
     EmbeddingSearchResponse,
+    JobCreateRequest,
+    JobSnapshotResponse,
     SectionEmbeddingMatch,
 )
 from app.store import build_store
@@ -23,10 +26,25 @@ WEB_ROOT = BASE_DIR / "web"
 
 app = FastAPI(title="Markdown Web Browser")
 app.mount("/static", StaticFiles(directory=WEB_ROOT), name="static")
+JOB_MANAGER = JobManager()
 store = build_store()
 
 
 def _demo_manifest_payload() -> dict:
+    warnings = [
+        {
+            "code": "canvas-heavy",
+            "message": "High canvas count may hide chart labels.",
+            "count": 6,
+            "threshold": 3,
+        },
+        {
+            "code": "video-heavy",
+            "message": "Multiple video elements detected; expect motion blur.",
+            "count": 3,
+            "threshold": 2,
+        },
+    ]
     return {
         "job_id": "demo",
         "cft_version": "chrome-130.0.6723.69",
@@ -38,6 +56,12 @@ def _demo_manifest_payload() -> dict:
         "capture_ms": 11234,
         "ocr_ms": 20987,
         "stitch_ms": 1289,
+        "blocklist_version": "2025-11-07",
+        "blocklist_hits": {
+            "#onetrust-consent-sdk": 2,
+            "[data-testid='cookie-banner']": 1,
+        },
+        "warnings": warnings,
     }
 
 
@@ -53,6 +77,24 @@ def _demo_snapshot() -> dict:
         blend_dom_with_ocr(dom_links=demo_dom_links(), ocr_links=demo_ocr_links())
     )
     return snapshot
+
+
+def _snapshot_to_response(snapshot: JobSnapshot) -> JobSnapshotResponse:
+    state = snapshot.get("state")
+    if isinstance(state, JobState):
+        state_value = state.value
+    else:
+        state_value = str(state)
+    manifest = snapshot.get("manifest")
+    return JobSnapshotResponse(
+        id=snapshot["id"],
+        state=state_value,
+        url=snapshot["url"],
+        progress=snapshot.get("progress"),
+        manifest_path=snapshot.get("manifest_path"),
+        manifest=manifest,
+        error=snapshot.get("error"),
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -76,80 +118,49 @@ async def demo_job_snapshot() -> dict:
     return _demo_snapshot()
 
 
-@app.get("/jobs/demo/stream")
-async def demo_job_stream(request: Request) -> StreamingResponse:
-    """Emit a deterministic SSE stream so the frontend can exercise UI wiring."""
+@app.post("/jobs", response_model=JobSnapshotResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_job(request: JobCreateRequest) -> JobSnapshotResponse:
+    snapshot = await JOB_MANAGER.create_job(request)
+    return _snapshot_to_response(snapshot)
 
-    async def event_generator() -> AsyncGenerator[str, None]:
-        manifest_payload = _demo_manifest_payload()
-        updates = [
-            ("state", "<span class=\"badge badge--info\">CAPTURING</span>"),
-            ("progress", "4 / 12 tiles"),
-            ("runtime", "CfT Stable-1 · Playwright 1.55.0"),
-            (
-                "rendered",
-                "<article><h3>Demo Article</h3><p>The Markdown preview updates live as OCR tiles finish.</p></article>",
-            ),
-            (
-                "raw",
-                "# Demo Article\n\nThis Markdown block mirrors OCR output. Tile provenance comments will appear inline.\n",
-            ),
-            (
-                "manifest",
-                json.dumps(manifest_payload),
-            ),
-            (
-                "links",
-                json.dumps(
-                    serialize_links(
-                        blend_dom_with_ocr(
-                            dom_links=demo_dom_links(),
-                            ocr_links=demo_ocr_links(),
-                        )
-                    )
-                ),
-            ),
-            (
-                "artifacts",
-                json.dumps(
-                    [
-                        {"id": "tile_00", "offset": "y=0", "sha": "a1b2c3"},
-                        {"id": "tile_01", "offset": "y=1100", "sha": "d4e5f6"},
-                    ]
-                ),
-            ),
-            (
-                "log",
-                "<li>00:00:01 — Started viewport sweep (1280×2000, overlap 120px)</li>",
-            ),
-            (
-                "log",
-                "<li>00:00:02 — Tile t0 sha256 a1b2 captured · SSIM warm-up</li>",
-            ),
-            (
-                "log",
-                "<li>00:00:03 — OCR queued 6 tiles · remote policy olmocr-2-7b-1025-fp8</li>",
-            ),
-            ("state", "<span class=\"badge badge--warn\">OCR_WAITING</span>"),
-            ("progress", "9 / 12 tiles"),
-        ]
 
-        for event_name, payload in updates:
-            yield f"event: {event_name}\ndata: {payload}\n\n"
-            await asyncio.sleep(0.75)
-            if await request.is_disconnected():
-                return
+@app.get("/jobs/{job_id}", response_model=JobSnapshotResponse)
+async def fetch_job(job_id: str) -> JobSnapshotResponse:
+    try:
+        snapshot = JOB_MANAGER.get_snapshot(job_id)
+    except KeyError as exc:  # pragma: no cover - runtime only
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    return _snapshot_to_response(snapshot)
 
+
+@app.get("/jobs/{job_id}/stream")
+async def job_stream(job_id: str, request: Request) -> StreamingResponse:
+    try:
+        queue = JOB_MANAGER.subscribe(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+
+    async def event_generator() -> AsyncIterator[str]:
         heartbeat = 0
-        while True:
-            heartbeat += 1
-            yield "event: log\n"
-            yield f"data: <li>Heartbeat {heartbeat}: awaiting final stitch…</li>\n\n"
-            await asyncio.sleep(4)
-            if await request.is_disconnected():
-                return
+        try:
+            while True:
+                try:
+                    snapshot = await asyncio.wait_for(queue.get(), timeout=5)
+                except asyncio.TimeoutError:
+                    heartbeat += 1
+                    yield f"event: log\ndata: <li>Heartbeat {heartbeat}: waiting for updates…</li>\n\n"
+                    if await request.is_disconnected():
+                        break
+                    continue
+                for event_name, payload in _snapshot_events(snapshot):
+                    yield f"event: {event_name}\ndata: {payload}\n\n"
+                if await request.is_disconnected():
+                    break
+        finally:
+            JOB_MANAGER.unsubscribe(job_id, queue)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 @app.get("/jobs/demo/links.json")
 async def demo_links() -> list[dict[str, str]]:
@@ -157,6 +168,45 @@ async def demo_links() -> list[dict[str, str]]:
 
     blended = blend_dom_with_ocr(dom_links=demo_dom_links(), ocr_links=demo_ocr_links())
     return serialize_links(blended)
+
+
+@app.get("/jobs/{job_id}/manifest.json")
+async def job_manifest(job_id: str) -> JSONResponse:
+    try:
+        manifest = store.read_manifest(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Manifest not available yet") from None
+    return JSONResponse(manifest)
+
+
+@app.get("/jobs/{job_id}/links.json")
+async def job_links(job_id: str) -> list[dict[str, Any]]:
+    try:
+        return store.read_links(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+
+
+@app.get("/jobs/{job_id}/result.md")
+async def job_markdown(job_id: str) -> PlainTextResponse:
+    try:
+        markdown = store.read_markdown(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Markdown not available yet") from None
+    return PlainTextResponse(markdown, media_type="text/markdown")
+
+
+@app.get("/jobs/{job_id}/artifact/{artifact_path:path}")
+async def job_artifact(job_id: str, artifact_path: str) -> FileResponse:
+    try:
+        target = store.resolve_artifact(job_id, artifact_path)
+    except (KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Artifact not found") from exc
+    return FileResponse(target)
 
 
 @app.post("/jobs/{job_id}/embeddings/search", response_model=EmbeddingSearchResponse)
@@ -188,3 +238,27 @@ async def embeddings_search(job_id: str, payload: EmbeddingSearchRequest) -> Emb
             for match in matches
         ],
     )
+
+
+def _snapshot_events(snapshot: JobSnapshot) -> list[tuple[str, str]]:
+    events: list[tuple[str, str]] = []
+    state = snapshot.get("state")
+    if state:
+        state_value = state if isinstance(state, str) else str(state)
+        events.append(("state", state_value))
+    progress = snapshot.get("progress")
+    if isinstance(progress, dict):
+        done = progress.get("done", 0)
+        total = progress.get("total", 0)
+        events.append(("progress", f"{done} / {total} tiles"))
+    manifest = snapshot.get("manifest")
+    if manifest:
+        events.append(("manifest", json.dumps(manifest)))
+        if isinstance(manifest, dict):
+            warnings = manifest.get("warnings")
+            if warnings:
+                events.append(("warnings", json.dumps(warnings)))
+    artifacts = snapshot.get("artifacts")
+    if artifacts:
+        events.append(("artifacts", json.dumps(artifacts)))
+    return events

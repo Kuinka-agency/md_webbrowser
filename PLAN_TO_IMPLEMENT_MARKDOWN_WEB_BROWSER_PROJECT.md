@@ -121,6 +121,7 @@ Key signals:
 ## 4. API Surface
 
 ### 4.1 Core Endpoints
+> _Status 2025-11-08 — BlackPond (bd-3px) implemented the `/jobs` REST + SSE contract: job creation, polling, `/jobs/{id}/stream`, artifact routes, and `/jobs/{id}/embeddings/search` are now live against the FastAPI app/stores._
 - `POST /jobs` → `{id}`
   - Body: `{url, profile_id?, capture_mode:"screenshot"|"pdf"|"auto", ocr:{provider, model}, viewport?, scroll?, reduce_motion?, local_ocr?:bool}`
 - `GET /jobs/{id}` → job snapshot
@@ -130,6 +131,8 @@ Key signals:
 - `GET /jobs/{id}/links.json` → anchors/forms/headings/meta
 - `GET /jobs/{id}/artifact/{name}` → images/PDF
 - `POST /replay` → re-run with same manifest but different OCR/tiling policy
+
+_2025-11-08 — FuchsiaPond (bd: markdown_web_browser-t82) implemented real `POST /jobs` + `GET /jobs/{id}` routes via the new JobManager, so capture requests now persist manifests/tiles in `Store` and expose snapshots for the UI. SSE + events remain on the roadmap._
 
 ### 4.2 Job States
 1. `BROWSER_STARTING`
@@ -186,12 +189,14 @@ _2025-11-08 — Added BeautifulSoup-powered DOM snapshot parsing so `extract_lin
 - Canvas/WebGL-first content → emit warning banner + attach raw tile thumbnail next to Markdown block.
 - Anti-automation overlays → blocklist injection + UI toggle for per-domain overrides.
   _2025-11-08 — BrownStone (bd-dm9) introduced JSON-backed selector blocklist + capture warnings; manifests now log `blocklist_hits` + warning codes for SSE/UI surfacing._
+- Scroll shrink / poor overlap → capture now emits `scroll-shrink` and `overlap-low` warnings whenever viewport sweeps retry due to shrinking SPAs or overlap match ratios fall below the configured threshold (defaults: 1 shrink event, 0.65 ratio). _2025-11-08 — BrownStone (bd-dm9)._ 
 - Server overload → adaptive OCR concurrency, queue visibility, remote/local failover.
 - Partial results → stream partial Markdown as tiles finish; mark sections as incomplete with provenance comments.
 - Full-page retries → viewport sweep restarts when shrink detected; record both sweeps.
 - Lazy-load deadlocks → Instrument the scroll policy to detect when `IntersectionObserver` stops firing despite new requests; escalate to a “force flush” mode that triggers manual `scrollTo` bursts and logs `scroll_height_stuck` in the manifest for later triage.
 - OCR flake classification → Tag retries as `timeout`, `5xx`, `throttle`, or `quality_guard`; persist counters per job so ops can spot systemic issues (e.g., remote endpoint throttling) without combing logs.
 - Artifact corruption → Validate tile SHA256 before submit and after OCR response; auto-delete/re-shoot corrupted tiles while keeping the previous attempt zipped for debugging.
+- _2025-11-08 — BrownStone (bd-dm9) now logs warning/blocklist incidents to `ops/warnings.jsonl` automatically (configurable via `WARNING_LOG_PATH`)._
 
 ---
 
@@ -236,6 +241,8 @@ mdwb fetch https://example.com \
 ```
 
 _2025-11-08 — PurpleDog (bd-dwf) added the initial Typer/Rich CLI scaffold (`scripts/mdwb_cli.py`) with demo `snapshot/links/stream/watch/events` commands powered by the `/jobs/demo/*` endpoints (including `--json`/`--raw` output); fetch/watch/replay commands will replace the stubs once `/jobs` lands._
+
+_2025-11-08 — BrownStone (bd-dm9) expanded the manifest + `/jobs` schema so blocklist hits and structured capture warnings flow through snapshots/SSE; demo endpoints + UI now render the warning pills, paving the way for real `/jobs` events once 3px is wired._
 
 ### 9.2 Agent JSON Contract
 ```
@@ -670,6 +677,8 @@ florence-2-base:
 mdwb fetch https://example.com --out out.md --model olmOCR-2-7B-1025-FP8 \
   --events | jq --unbuffered 'select(.event=="warning")'
 ```
+
+_2025-11-08 — PinkCreek wired `scripts/mdwb_cli.py` into the shared `.env` config so demo commands (snapshot/links/stream) automatically use `API_BASE_URL` + `MDWB_API_KEY`; override with `--api-base` when pointing at staging._
 
 Use these snippets as scaffolding for docs, onboarding, and regression verification—keep them in sync with real code as part of the release checklist (Section 20.3).
 

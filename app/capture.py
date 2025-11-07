@@ -11,9 +11,13 @@ from typing import Any, List, Optional, Sequence
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from app.blocklist import BlocklistConfig, apply_blocklist, cached_blocklist
-from app.capture_warnings import CaptureWarningEntry, collect_capture_warnings
+from app.capture_warnings import (
+    CaptureWarningEntry,
+    build_sweep_warning,
+    collect_capture_warnings,
+)
 from app.settings import WarningSettings, get_settings
-from app.tiler import TileSlice, slice_into_tiles
+from app.tiler import TileSlice, slice_into_tiles, validate_tiles
 
 LOGGER = logging.getLogger(__name__)
 
@@ -169,7 +173,7 @@ async def _perform_viewport_sweeps(
 
     await page.goto(config.url, wait_until="networkidle")
     blocklist_hits = await apply_blocklist(page, url=config.url, config=blocklist_config)
-    overlay_warnings = await collect_capture_warnings(page, warning_settings)
+    warning_entries: list[CaptureWarningEntry] = await collect_capture_warnings(page, warning_settings)
     await page.evaluate("window.scrollTo(0, 0)")
     await page.wait_for_timeout(settle_ms)
     sweep_count = 0
@@ -200,6 +204,7 @@ async def _perform_viewport_sweeps(
             viewport_y_offset=y_offset,
             target_long_side_px=target_long_side_px,
         )
+        validate_tiles(new_tiles)
         for tile in new_tiles:
             if previous_tile:
                 match = _overlap_match(previous_tile, tile)
@@ -249,7 +254,14 @@ async def _perform_viewport_sweeps(
         overlap_pairs=overlap_pairs,
         overlap_match_ratio=_safe_ratio(overlap_matches, overlap_pairs),
     )
-    return tiles, stats, user_agent, blocklist_hits, overlay_warnings
+    sweep_warnings = build_sweep_warning(
+        shrink_events=stats.shrink_events,
+        overlap_pairs=stats.overlap_pairs,
+        overlap_match_ratio=stats.overlap_match_ratio,
+        settings=warning_settings,
+    )
+    warning_entries.extend(sweep_warnings)
+    return tiles, stats, user_agent, blocklist_hits, warning_entries
 
 
 _CHANNEL_ALIASES = {

@@ -10,7 +10,6 @@ from typing import Sequence
 
 import sqlite_vec
 from sqlmodel import Session
-from sqlalchemy import text
 
 
 EMBEDDING_DIM = 1536
@@ -96,8 +95,9 @@ def search_embeddings(
 
     _validate_query_vector(query_vector)
     normalized_query = _normalize_vector(query_vector)
-    cursor = session.connection().execute(
-        "SELECT section_id, tile_start, tile_end, embedding FROM section_embeddings WHERE run_id = :run_id",
+    cursor = session.connection().exec_driver_sql(
+        "SELECT section_id, tile_start, tile_end, embedding "
+        "FROM section_embeddings WHERE run_id = :run_id",
         {"run_id": run_id},
     )
     total = 0

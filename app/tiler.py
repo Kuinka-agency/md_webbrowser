@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 import pyvips
 
@@ -164,3 +164,20 @@ def _overlap_sha(image: pyvips.Image, *, position: str, overlap_px: int) -> Opti
 
     png_bytes = strip.write_to_buffer(".png", **_PNG_ENCODE_ARGS)
     return hashlib.sha256(png_bytes).hexdigest()
+
+
+def validate_tiles(tiles: Iterable[TileSlice]) -> None:
+    """Ensure each tile's checksum matches bytes and pyvips can decode it."""
+
+    for tile in tiles:
+        if hashlib.sha256(tile.png_bytes).hexdigest() != tile.sha256:
+            raise ValueError(f"Tile {tile.index} checksum mismatch")
+        try:
+            image = pyvips.Image.new_from_buffer(tile.png_bytes, "", access="sequential")
+        except pyvips.Error as exc:  # pragma: no cover - depends on corrupted data
+            raise ValueError(f"Tile {tile.index} PNG decode failed") from exc
+        if image.width != tile.width or image.height != tile.height:
+            raise ValueError(
+                f"Tile {tile.index} dimension mismatch: expected {tile.width}x{tile.height},"
+                f" got {image.width}x{image.height}"
+            )

@@ -38,9 +38,14 @@ print(settings.ocr.server_url)
 | `CAPTURE_COLOR_SCHEME` | `light` | Color scheme forced during capture (manifest `viewport.color_scheme`). |
 | `CANVAS_WARNING_THRESHOLD` | `3` | Canvas element count that emits a `canvas-heavy` capture warning. |
 | `VIDEO_WARNING_THRESHOLD` | `2` | Video element count that emits a `video-heavy` capture warning. |
+| `SEAM_WARNING_RATIO` | `0.9` | Overlap match ratio that triggers a duplicate-seam warning. |
+| `SEAM_WARNING_MIN_PAIRS` | `5` | Minimum overlap pair count before seam warnings fire. |
+| `SCROLL_SHRINK_WARNING_THRESHOLD` | `1` | Number of scroll-height shrink events before emitting a `scroll-shrink` warning. |
+| `OVERLAP_WARNING_RATIO` | `0.65` | Minimum acceptable overlap match ratio (0–1); lower ratios trigger `overlap-low`. |
 | `BLOCKLIST_PATH` | `config/blocklist.json` | JSON selectors injected during capture; recorded via `manifest.blocklist_version`. |
+| `WARNING_LOG_PATH` | `ops/warnings.jsonl` | JSONL file that stores capture warning/blocklist incidents. |
 | `VIEWPORT_OVERLAP_PX` | `120` | Pixels of overlap between viewport sweeps (Plan §19.2). |
-| `TILE_LONG_SIDE_PX` | `1288` | Tile longest side enforced by pyvips tiler + CLI defaults. |
+| `CAPTURE_LONG_SIDE_PX` | `1288` | Tile longest side enforced by pyvips tiler + CLI defaults. |
 | `TILE_OVERLAP_PX` | `120` | Overlap inside the pyvips tiler; must match SSIM stitching heuristics. |
 | `SCROLL_SETTLE_MS` | `350` | Wait time between scrolls so lazy-loaded content settles. |
 | `MAX_VIEWPORT_SWEEPS` | `200` | Guardrail to prevent infinite scroll loops. |
@@ -49,8 +54,6 @@ print(settings.ocr.server_url)
 | `SCREENSHOT_STYLE_HASH` | auto-derived if blank | Hash of viewport/mask settings included in manifests & bug reports. |
 | `PROMETHEUS_PORT` | `9000` | Port for the Prometheus metrics endpoint. |
 | `HTMX_SSE_HEARTBEAT_MS` | `4000` | Interval (ms) for SSE heartbeat events streamed to the UI. |
-| `CANVAS_WARNING_THRESHOLD` | `3` | Number of `<canvas>` nodes before we emit a `canvas_heavy` warning. |
-| `VIDEO_WARNING_THRESHOLD` | `2` | Number of `<video>` nodes before we emit a `video_overlay` warning. |
 
 Add any new variables to `.env.example`, document them here, and update the
 manifest schema if they need to be echoed downstream.

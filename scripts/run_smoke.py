@@ -219,7 +219,7 @@ def write_summary_markdown(date_dir: Path, records: list[RunRecord]) -> Path:
 def _collect_history(days: int) -> list[Path]:
     if not PRODUCTION_ROOT.exists():
         return []
-    cut_off = datetime.utcnow().date() - timedelta(days=days - 1)
+    cut_off = datetime.now(timezone.utc).date() - timedelta(days=days - 1)
     history_dirs: list[Path] = []
     for child in sorted(PRODUCTION_ROOT.iterdir()):
         if not child.is_dir():
@@ -244,10 +244,11 @@ def update_weekly_summary(config: dict[str, Any], window_days: int = 7) -> None:
         for entry in entries:
             metrics.setdefault(entry["category"], []).append(entry)
 
+    categories_summary: list[dict[str, Any]] = []
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "window_days": window_days,
-        "categories": [],
+        "categories": categories_summary,
     }
     budgets = {cat["name"]: cat.get("p95_budget_ms") for cat in config.get("categories", [])}
 
@@ -255,7 +256,7 @@ def update_weekly_summary(config: dict[str, Any], window_days: int = 7) -> None:
         capture_values = [entry["capture_ms"] for entry in entries if entry.get("capture_ms") is not None]
         total_values = [entry["total_ms"] for entry in entries if entry.get("total_ms") is not None]
         budget = budgets.get(category)
-        summary["categories"].append(
+        categories_summary.append(
             {
                 "name": category,
                 "runs": len(entries),
@@ -282,7 +283,7 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=900.0)
     args = parser.parse_args()
 
-    run_date = args.date or datetime.utcnow().date().isoformat()
+    run_date = args.date or datetime.now(timezone.utc).date().isoformat()
     config = _load_production_set()
     categories = _parse_categories(config)
     settings = olmocr_cli.load_settings()

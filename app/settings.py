@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Final
 from decouple import Config as DecoupleConfig, RepositoryEnv
 
 from app.schemas import ConcurrencyWindow, ManifestEnvironment, ViewportSettings
+
+LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "BrowserSettings",
@@ -81,6 +84,17 @@ class WarningSettings:
 
     canvas_warning_threshold: int
     video_warning_threshold: int
+    shrink_warning_threshold: int
+    overlap_warning_ratio: float
+    seam_warning_ratio: float
+    seam_warning_min_pairs: int
+
+
+@dataclass(frozen=True, slots=True)
+class LoggingSettings:
+    """Filesystem paths for ops logging."""
+
+    warning_log_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +107,7 @@ class Settings:
     telemetry: TelemetrySettings
     storage: StorageSettings
     warnings: WarningSettings
+    logging: LoggingSettings
 
     def manifest_environment(self, *, playwright_version: str | None = None) -> ManifestEnvironment:
         """Return the manifest metadata block used across captures."""
@@ -129,11 +144,21 @@ class Settings:
 def load_config(env_path: str = ".env") -> DecoupleConfig:
     """Return a python-decouple config anchored to the repository .env file."""
 
-    return DecoupleConfig(RepositoryEnv(env_path))
+    target = Path(env_path)
+    if not target.exists():
+        fallback = target.with_suffix(target.suffix + ".example") if target.suffix else Path(f"{env_path}.example")
+        if fallback.exists():
+            LOGGER.warning("%s missing; falling back to %s", env_path, fallback)
+            target = fallback
+    return DecoupleConfig(RepositoryEnv(str(target)))
 
 
 def _int(cfg: DecoupleConfig, key: str, *, default: int) -> int:
     return cfg(key, cast=int, default=default)
+
+
+def _float(cfg: DecoupleConfig, key: str, *, default: float) -> float:
+    return cfg(key, cast=float, default=default)
 
 
 def _bool(cfg: DecoupleConfig, key: str, *, default: bool) -> bool:
@@ -256,6 +281,13 @@ def get_settings(env_path: str = ".env") -> Settings:
     warning_settings = WarningSettings(
         canvas_warning_threshold=_int(cfg, "CANVAS_WARNING_THRESHOLD", default=3),
         video_warning_threshold=_int(cfg, "VIDEO_WARNING_THRESHOLD", default=2),
+        shrink_warning_threshold=_int(cfg, "SCROLL_SHRINK_WARNING_THRESHOLD", default=1),
+        overlap_warning_ratio=_float(cfg, "OVERLAP_WARNING_RATIO", default=0.65),
+        seam_warning_ratio=_float(cfg, "SEAM_WARNING_RATIO", default=0.9),
+        seam_warning_min_pairs=_int(cfg, "SEAM_WARNING_MIN_PAIRS", default=5),
+    )
+    logging_settings = LoggingSettings(
+        warning_log_path=Path(cfg("WARNING_LOG_PATH", default="ops/warnings.jsonl")),
     )
 
     return Settings(
@@ -265,6 +297,7 @@ def get_settings(env_path: str = ".env") -> Settings:
         telemetry=telemetry,
         storage=storage,
         warnings=warning_settings,
+        logging=logging_settings,
     )
 
 

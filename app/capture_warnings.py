@@ -27,7 +27,7 @@ class CaptureWarningEntry:
     code: str
     message: str
     count: int
-    threshold: int
+    threshold: float
 
 
 async def collect_warning_stats(page: Page) -> WarningStats:
@@ -105,3 +105,51 @@ async def collect_capture_warnings(page: Page, settings: WarningSettings) -> Lis
 
     stats = await collect_warning_stats(page)
     return build_warnings(stats, settings=settings)
+
+
+def build_sweep_warning(
+    *,
+    shrink_events: int,
+    overlap_pairs: int,
+    overlap_match_ratio: float,
+    settings: WarningSettings,
+) -> List[CaptureWarningEntry]:
+    """Emit warnings derived from sweep stats (shrink + overlap ratios)."""
+
+    warnings: List[CaptureWarningEntry] = []
+
+    if settings.shrink_warning_threshold > 0 and shrink_events >= settings.shrink_warning_threshold:
+        warnings.append(
+            CaptureWarningEntry(
+                code="scroll-shrink",
+                message="Repeated scroll-height shrink events detected; viewport sweep retried.",
+                count=shrink_events,
+                threshold=settings.shrink_warning_threshold,
+            )
+        )
+
+    if overlap_pairs > 0 and settings.overlap_warning_ratio > 0 and overlap_match_ratio < settings.overlap_warning_ratio:
+        warnings.append(
+            CaptureWarningEntry(
+                code="overlap-low",
+                message="Tile overlap match ratio is below the configured threshold; seams may misalign.",
+                count=int(overlap_match_ratio * 100),
+                threshold=int(settings.overlap_warning_ratio * 100),
+            )
+        )
+
+    if (
+        overlap_pairs >= settings.seam_warning_min_pairs
+        and settings.seam_warning_ratio > 0
+        and overlap_match_ratio >= settings.seam_warning_ratio
+    ):
+        warnings.append(
+            CaptureWarningEntry(
+                code="duplicate-seam",
+                message="High overlap match ratio suggests duplicate tiling seams.",
+                count=overlap_pairs,
+                threshold=settings.seam_warning_ratio,
+            )
+        )
+
+    return warnings

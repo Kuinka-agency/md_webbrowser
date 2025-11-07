@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field, field_validator
 
 from app.embeddings import EMBEDDING_DIM
@@ -20,7 +22,13 @@ class JobSnapshotResponse(BaseModel):
     id: str
     state: str
     url: str
-    manifest: "ManifestMetadata | None" = Field(default=None, description="Latest manifest payload if available")
+    progress: dict[str, int] | None = Field(default=None, description="Tile progress (done vs total)")
+    manifest_path: str | None = Field(default=None, description="Filesystem path to manifest.json if persisted")
+    manifest: ManifestMetadata | dict[str, Any] | None = Field(
+        default=None,
+        description="Latest manifest payload if available",
+    )
+    error: str | None = Field(default=None, description="Failure message when state=FAILED")
 
 
 class ConcurrencyWindow(BaseModel):
@@ -68,7 +76,7 @@ class ManifestWarning(BaseModel):
     code: str = Field(description="Stable identifier (e.g., canvas-heavy)")
     message: str = Field(description="Human-friendly details")
     count: int = Field(ge=0, description="Observed count triggering the warning")
-    threshold: int = Field(ge=0, description="Configured threshold for the warning")
+    threshold: float = Field(ge=0, description="Configured threshold for the warning")
 
 
 class ManifestTimings(BaseModel):
@@ -85,6 +93,18 @@ class ManifestMetadata(BaseModel):
 
     environment: ManifestEnvironment
     timings: ManifestTimings = Field(default_factory=ManifestTimings)
+    blocklist_version: str | None = Field(
+        default=None,
+        description="Version label for the selector blocklist used during capture",
+    )
+    blocklist_hits: dict[str, int] = Field(
+        default_factory=dict,
+        description="Selectors hidden during capture mapped to hit counts",
+    )
+    warnings: list[ManifestWarning] = Field(
+        default_factory=list,
+        description="Structured warnings emitted by capture heuristics",
+    )
 
 
 class EmbeddingSearchRequest(BaseModel):

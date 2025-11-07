@@ -88,3 +88,11 @@ guarded hyphenation, table seam rules)
 - **Raster limits on tall pages** → viewport sweeps. 
 - **Animated UIs** → reduced-motion + CSS disables; test-time `animations:'disabled'` for smoketests. 
 - **Consent overlays** → adblock engine + CSS hide + “retry sweep if height shrinks” heuristic. 
+
+## API Surface (Plan §§2, 4, 9)
+
+- `POST /jobs` — enqueue a capture job; returns an initial `JobSnapshotResponse` with state `BROWSER_STARTING`.
+- `GET /jobs/{id}` — latest snapshot (state/progress/manifest path) for orchestration and polling clients.
+- `GET /jobs/{id}/stream` — SSE feed emitting `state`, `progress`, `manifest`, `warnings`, and `artifacts` events; used by the HTMX UI and agent tooling.
+- Artifact endpoints: `/jobs/{id}/manifest.json`, `/jobs/{id}/links.json`, `/jobs/{id}/result.md`, and `/jobs/{id}/artifact/{path}` expose persisted outputs for CLI/automation and demos.
+- `/jobs/{id}/embeddings/search` — cosine similarity search on sqlite-vec section embeddings (used by the Embeddings tab + agents).

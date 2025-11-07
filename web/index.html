@@ -57,6 +57,12 @@
           <p class="status-label">SSE</p>
           <p class="status-value" id="job-sse-status">Disconnected</p>
         </article>
+        <article class="status-card status-card--warnings">
+          <p class="status-label">Warnings</p>
+          <div class="warning-list" data-warning-list>
+            <span class="warning-empty">None detected.</span>
+          </div>
+        </article>
       </section>
 
       <section class="tabs" data-tabs>
@@ -99,10 +105,39 @@
           <article class="tab-panel" data-tab-panel="manifest" hidden>
             <h2>Manifest</h2>
             <pre class="placeholder manifest" data-sse-field="manifest">CfT label, Playwright version, screenshot style hash, and timing metrics will stream into this panel.</pre>
+            <div class="blocklist-panel">
+              <h3>Blocklist Hits</h3>
+              <div class="blocklist-list" data-blocklist-hits>
+                <p class="placeholder">No selectors matched during this run.</p>
+              </div>
+            </div>
           </article>
-          <article class="tab-panel" data-tab-panel="embeddings" hidden>
+          <article class="tab-panel" data-tab-panel="embeddings" data-embeddings-panel hidden>
             <h2>Embeddings</h2>
-            <p class="placeholder">sqlite-vec section search UI placeholder.</p>
+            <p>
+              Paste a 1,536-dim vector (JSON array) or use the demo vector, then search the current job's
+              sqlite-vec section embeddings to jump to relevant tiles.
+            </p>
+            <div class="embeddings-form" data-embeddings-form>
+              <label class="form-label">
+                Vector JSON
+                <textarea data-embeddings-vector rows="6" placeholder="[1,0,0,...]"></textarea>
+              </label>
+              <div class="form-inline">
+                <label class="form-label">
+                  Top K
+                  <input type="number" min="1" max="50" value="5" data-embeddings-topk />
+                </label>
+                <div class="form-buttons">
+                  <button type="button" class="toolbar__button" data-embeddings-demo>Use Demo Vector</button>
+                  <button type="button" class="toolbar__button toolbar__button--primary" data-embeddings-run>Search</button>
+                </div>
+              </div>
+              <p class="embeddings-status" data-embeddings-status>Awaiting input…</p>
+              <div class="embeddings-results" data-embeddings-results>
+                <p class="placeholder">No results yet.</p>
+              </div>
+            </div>
           </article>
           <article class="tab-panel" data-tab-panel="events" hidden>
             <h2>Event Feed</h2>

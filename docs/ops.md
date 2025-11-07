@@ -64,3 +64,12 @@ Publish the summary in Monday’s ops update and attach the most recent
   writes a minimal `.env` from repository secrets (`MDWB_API_BASE_URL`, `MDWB_API_KEY`,
   `OLMOCR_SERVER`, `OLMOCR_API_KEY`), runs `scripts/run_smoke.py --date ${{ steps.dates.outputs.today }}`,
   and uploads `benchmarks/production/<DATE>` as an artifact.
+
+## API CLI Helpers
+
+- Use `uv run python scripts/mdwb_cli.py demo snapshot` (or `demo stream`/`demo events`) to
+  interact with the built-in `/jobs/demo` endpoints. The CLI automatically reads
+  `API_BASE_URL` and `MDWB_API_KEY` from `.env`, so authenticated deployments just need
+  the secrets filled in once.
+- Override the API base temporarily via `--api-base https://staging.mdwb.internal`
+  if you need to target a different environment.
