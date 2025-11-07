@@ -118,7 +118,7 @@ def _watch_job_events(
     cursor: str | None,
     follow: bool,
     interval: float,
-    output,
+    output: TextIO,
 ) -> None:
     client = _client(settings)
     try:

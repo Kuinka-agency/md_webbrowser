@@ -7,6 +7,7 @@ import argparse
 import json
 import random
 import re
+import shutil
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -276,6 +277,19 @@ def write_summary_markdown(date_dir: Path, records: list[RunRecord]) -> Path:
     return summary_path
 
 
+def update_latest_markers(date_dir: Path) -> None:
+    marker = PRODUCTION_ROOT / "latest.txt"
+    marker.write_text(f"{date_dir.name}\n", encoding="utf-8")
+    copies = {
+        "manifest_index.json": PRODUCTION_ROOT / "latest_manifest_index.json",
+        "summary.md": PRODUCTION_ROOT / "latest_summary.md",
+    }
+    for filename, dest in copies.items():
+        src = date_dir / filename
+        if src.exists():
+            shutil.copy2(src, dest)
+
+
 def _collect_history(days: int) -> list[Path]:
     if not PRODUCTION_ROOT.exists():
         return []
@@ -368,6 +382,7 @@ def main() -> None:
 
     write_manifest_index(date_dir, all_records)
     write_summary_markdown(date_dir, all_records)
+    update_latest_markers(date_dir)
     update_weekly_summary(config)
     print(f"Smoke run complete for {run_date}; artifacts under {date_dir}")
 
