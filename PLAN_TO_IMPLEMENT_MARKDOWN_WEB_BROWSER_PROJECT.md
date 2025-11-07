@@ -135,7 +135,7 @@ Key signals:
 - `POST /replay` → re-run with same manifest but different OCR/tiling policy
 
 _2025-11-08 — FuchsiaPond (bd: markdown_web_browser-t82) implemented real `POST /jobs` + `GET /jobs/{id}` routes via the new JobManager, so capture requests now persist manifests/tiles in `Store` and expose snapshots for the UI. SSE + events remain on the roadmap._
-_2025-11-08 — JobManager now drives `/jobs/{id}/stream`, so the HTMX SSE endpoint emits live snapshot JSON (state, progress, manifest path) instead of the demo feed; `/jobs/{id}/events` now serves newline-delimited snapshots for CLI/agent consumption. The UI “Run Capture” button posts to `/jobs` and auto-attaches the stream, and `scripts/mdwb_cli.py` exposes real `stream`/`events` commands for job monitoring._
+_2025-11-08 — JobManager now drives `/jobs/{id}/stream`, so the HTMX SSE endpoint emits live snapshot JSON (state, progress, manifest path) instead of the demo feed; `/jobs/{id}/events` now serves newline-delimited snapshots for CLI/agent consumption. The UI Events tab tails the same feed, and `scripts/mdwb_cli.py` exposes real `stream`/`events` commands for job monitoring._
 
 ### 4.2 Job States
 1. `BROWSER_STARTING`
@@ -184,6 +184,8 @@ _2025-11-08 — `app/dom_links.py` now defines LinkRecord merge/serialization he
 
 _2025-11-08 — Added BeautifulSoup-powered DOM snapshot parsing so `extract_links_from_dom()` can return real anchors/forms once capture snapshots land._
 
+_2025-11-08 — FuchsiaMountain (bd-co1) hardened the live monitoring surfaces: the UI Events tab now consumes `/jobs/{id}/events` via a streaming NDJSON reader (with heartbeat/health badges + auto-refresh for manifest/links panels), SSE disconnects raise visual cues, and `scripts/mdwb_cli.py` exposes a `jobs watch` command plus resumable `events` polling so agents can tail event logs directly._
+
 ---
 
 ## 6. Error Handling & Resilience
@@ -202,6 +204,7 @@ _2025-11-08 — WhiteSnow (bd-dm9) added sweep stats + `validation_failures` to 
 - Artifact corruption → Validate tile SHA256 before submit and after OCR response; auto-delete/re-shoot corrupted tiles while keeping the previous attempt zipped for debugging.
 - _2025-11-08 — BrownStone (bd-dm9) now logs warning/blocklist incidents to `ops/warnings.jsonl` automatically (configurable via `WARNING_LOG_PATH`)._
 - _2025-11-08 — BlueCreek (bd-bo2) is wiring the existing `JobManager` event log into `/jobs/{id}/events`, adding heartbeats, and keeping the NDJSON feed tailing future updates so CLI/agents can rely on a continuous history._
+- _2025-11-08 — BlueCreek (bd-adg) fixed `/jobs/{id}/events` sequence cursors so NDJSON tailers only receive new entries (no more replay loops) and exposed the underlying `get_events(..., min_sequence=…)` filter for API/CLI consumers._
 
 ---
 
@@ -254,6 +257,8 @@ _2025-11-08 — BrownStone (bd-dm9) added `mdwb warnings tail` to read the new w
 
 _2025-11-08 — BrownStone (bd-dm9) expanded the manifest + `/jobs` schema so blocklist hits and structured capture warnings flow through snapshots/SSE; demo endpoints + UI now render the warning pills, paving the way for real `/jobs` events once 3px is wired._
 
+_2025-11-08 — WhiteSnow (bd-y5b) hardened `scripts/olmocr_cli.py` optional handling + type hints so `uvx ty check` stays green after importing the upstream CLI helpers (detected server/model flags + stdout filtering)._
+
 ### 9.2 Agent JSON Contract
 ```
 POST /jobs { url, options }
@@ -263,7 +268,7 @@ GET  /jobs/{id}/status
 ```
 
 ### 9.3 Event Stream
-_2025-11-08 — OrangeMountain (bd-3px) wired a persistent event log so `/jobs/{id}/events?since=<iso>` serves NDJSON snapshots and `/jobs/{id}/webhooks` registers signed callbacks (header `X-MDWB-Signature`). `scripts/mdwb_cli.py events` now tails the JSON feed for automation._
+_2025-11-08 — OrangeMountain (bd-3px/dwf) wired a persistent event log so `/jobs/{id}/events?since=<iso>` serves NDJSON snapshots and `/jobs/{id}/webhooks` registers signed callbacks (header `X-MDWB-Signature`). `scripts/mdwb_cli.py watch` streams the live NDJSON feed (with `--since/--follow` cursors) and falls back to SSE when the endpoint is unavailable; `mdwb events` outputs raw NDJSON for automation._
 - SSE: `event:state`, `event:tile`, `event:warning`
 - JSONLines: newline-delimited objects mirroring SSE for CLI `--follow`
 
@@ -699,7 +704,7 @@ Use these snippets as scaffolding for docs, onboarding, and regression verificat
 
 _2025-11-08 — PinkCreek (bd-ug0) spinning up nightly smoke + weekly latency automation and wiring manifests/log storage per this section._
 - `scripts/run_smoke.py` orchestrates nightly captures per `benchmarks/production_set.json` (writing `manifest_index.json` under `benchmarks/production/<date>/` and refreshing `weekly_summary.json`). See `docs/ops.md` for the runbook + verification checklist.
-- Use `--dry-run` to exercise the smoke pipeline without hitting `/jobs`; pair with `--seed` (defaults to `0`) to keep synthetic manifests deterministic so dashboard diffs stay stable. Scope to targeted slices with `--category <name>` (repeatable) when only certain sets need reruns. The script also mirrors the latest run into `benchmarks/production/latest_{manifest_index,summary}.json|md` so dashboards can read a stable path.
+- Use `--dry-run` to exercise the smoke pipeline without hitting `/jobs`; pair with `--seed` (defaults to `0`) to keep synthetic manifests deterministic so dashboard diffs stay stable. Scope to targeted slices with `--category <name>` (repeatable) when only certain sets need reruns. The script also mirrors the latest run into `benchmarks/production/latest_{manifest_index,summary}.json|md`, and `scripts/show_latest_smoke.py` prints those pointer files on demand so dashboards and humans can grab the freshest run without hunting for dates.
 
 Focus on a curated set of real customer-style URLs instead of synthetic benchmarks. Maintain `benchmarks/production_set.json` listing each URL, category, and target latency.
 

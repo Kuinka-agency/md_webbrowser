@@ -231,8 +231,29 @@ def write_manifest_index(date_dir: Path, records: list[RunRecord]) -> Path:
     return index_path
 
 
-def write_summary_markdown(date_dir: Path, records: list[RunRecord]) -> Path:
+def _aggregate_category_stats(records: list[RunRecord]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[RunRecord]] = defaultdict(list)
+    for record in records:
+        grouped[record.category].append(record)
+    stats: list[dict[str, Any]] = []
+    for category, cat_records in sorted(grouped.items()):
+        capture_values = [r.capture_ms for r in cat_records if r.capture_ms is not None]
+        total_values = [r.total_ms for r in cat_records if r.total_ms is not None]
+        stats.append(
+            {
+                "name": category,
+                "budget_ms": cat_records[0].budget_ms,
+                "jobs": len(cat_records),
+                "p95_capture_ms": _percentile(capture_values, 0.95),
+                "p95_total_ms": _percentile(total_values, 0.95),
+            }
+        )
+    return stats
+
+
+def write_summary_markdown(date_dir: Path, records: list[RunRecord]) -> tuple[Path, list[dict[str, Any]]]:
     lines: list[str] = [f"# Nightly Smoke — {date_dir.name}", ""]
+    stats = _aggregate_category_stats(records)
     grouped: dict[str, list[RunRecord]] = defaultdict(list)
     for record in records:
         grouped[record.category].append(record)
@@ -240,22 +261,18 @@ def write_summary_markdown(date_dir: Path, records: list[RunRecord]) -> Path:
     lines.append("| Category | Budget (ms) | Jobs | p95 capture (ms) | p95 total (ms) | Status |")
     lines.append("| --- | --- | --- | --- | --- | --- |")
 
-    for category in sorted(grouped):
-        cat_records = grouped[category]
-        capture_values = [r.capture_ms for r in cat_records if r.capture_ms is not None]
-        total_values = [r.total_ms for r in cat_records if r.total_ms is not None]
-        p95_capture = _percentile(capture_values, 0.95)
-        p95_total = _percentile(total_values, 0.95)
-        budget = cat_records[0].budget_ms
+    for entry in stats:
+        budget = entry["budget_ms"]
+        p95_total = entry["p95_total_ms"]
         status = "OK"
         if budget and p95_total and p95_total > budget:
             status = "⚠️ over budget"
         lines.append(
             "| {category} | {budget} | {jobs} | {p95_cap:.0f} | {p95_tot:.0f} | {status} |".format(
-                category=category,
+                category=entry["name"],
                 budget=budget or "—",
-                jobs=len(cat_records),
-                p95_cap=p95_capture or 0,
+                jobs=entry["jobs"],
+                p95_cap=entry["p95_capture_ms"] or 0,
                 p95_tot=p95_total or 0,
                 status=status,
             )
@@ -274,7 +291,17 @@ def write_summary_markdown(date_dir: Path, records: list[RunRecord]) -> Path:
 
     summary_path = date_dir / "summary.md"
     summary_path.write_text("\n".join(lines), encoding="utf-8")
-    return summary_path
+    return summary_path, stats
+
+
+def write_latest_metrics(date_dir: Path, stats: list[dict[str, Any]]) -> Path:
+    payload = {
+        "date": date_dir.name,
+        "categories": stats,
+    }
+    metrics_path = date_dir / "metrics.json"
+    metrics_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return metrics_path
 
 
 def update_latest_markers(date_dir: Path) -> None:
@@ -283,6 +310,7 @@ def update_latest_markers(date_dir: Path) -> None:
     copies = {
         "manifest_index.json": PRODUCTION_ROOT / "latest_manifest_index.json",
         "summary.md": PRODUCTION_ROOT / "latest_summary.md",
+        "metrics.json": PRODUCTION_ROOT / "latest_metrics.json",
     }
     for filename, dest in copies.items():
         src = date_dir / filename
@@ -393,7 +421,8 @@ def main() -> None:
         all_records.extend(records)
 
     write_manifest_index(date_dir, all_records)
-    write_summary_markdown(date_dir, all_records)
+    summary_path, stats = write_summary_markdown(date_dir, all_records)
+    write_latest_metrics(date_dir, stats)
     update_latest_markers(date_dir)
     update_weekly_summary(config)
     print(f"Smoke run complete for {run_date}; artifacts under {date_dir}")

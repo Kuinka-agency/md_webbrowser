@@ -137,6 +137,27 @@ async def test_job_manager_events_since(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_job_manager_events_sequence_filter(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    manager = JobManager(store=Store(config), runner=_fake_runner)
+    snapshot = await manager.create_job(JobCreateRequest(url="https://example.com/seq"))
+    job_id = snapshot["id"]
+    await manager._tasks[job_id]
+
+    events = manager.get_events(job_id)
+    assert events
+    last_seq = events[-1]["sequence"]
+
+    assert manager.get_events(job_id, min_sequence=last_seq) == []
+
+    manager._set_state(job_id, JobState.NAVIGATING)
+
+    new_events = manager.get_events(job_id, min_sequence=last_seq)
+    assert new_events
+    assert new_events[0]["sequence"] > last_seq
+
+
+@pytest.mark.asyncio
 async def test_job_manager_webhook_delivery(tmp_path: Path):
     config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
     sent: list[dict] = []

@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from enum import Enum
 from importlib import metadata
-from typing import Any, Awaitable, Callable, Dict, List, TypedDict
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, TypedDict
 from uuid import uuid4
 
 import hashlib
@@ -111,6 +111,7 @@ class JobManager:
         self._subscribers: Dict[str, List[asyncio.Queue[JobSnapshot]]] = {}
         self._event_logs: Dict[str, List[dict[str, Any]]] = {}
         self._event_sequences: Dict[str, int] = {}
+        self._event_subscribers: Dict[str, List[asyncio.Queue[dict[str, Any]]]] = {}
         self._webhooks: Dict[str, List[dict[str, Any]]] = {}
         self._webhook_sender = webhook_sender or _default_webhook_sender
 
@@ -147,6 +148,25 @@ class JobManager:
             subscribers.remove(queue)
         if not subscribers:
             self._subscribers.pop(job_id, None)
+
+    def subscribe_events(
+        self, job_id: str, *, since: datetime | None = None
+    ) -> tuple[list[dict[str, Any]], asyncio.Queue[dict[str, Any]]]:
+        if job_id not in self._snapshots:
+            raise KeyError(f"Job {job_id} not found")
+        backlog = self.get_events(job_id, since=since)
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._event_subscribers.setdefault(job_id, []).append(queue)
+        return backlog, queue
+
+    def unsubscribe_events(self, job_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        subscribers = self._event_subscribers.get(job_id)
+        if not subscribers:
+            return
+        if queue in subscribers:
+            subscribers.remove(queue)
+        if not subscribers:
+            self._event_subscribers.pop(job_id, None)
 
     async def _run_job(self, *, job_id: str, url: str) -> None:
         try:
@@ -185,24 +205,30 @@ class JobManager:
         snapshot["error"] = message
         self._broadcast(job_id)
 
-    def get_events(self, job_id: str, since: datetime | None = None) -> List[dict[str, Any]]:
+    def get_events(
+        self,
+        job_id: str,
+        since: datetime | None = None,
+        *,
+        min_sequence: int | None = None,
+    ) -> List[dict[str, Any]]:
         if job_id not in self._snapshots:
             raise KeyError(f"Job {job_id} not found")
         events = self._event_logs.get(job_id, [])
         if since is None:
-            return [event.copy() for event in events]
+            if min_sequence is None:
+                return [event.copy() for event in events]
+            return [
+                event.copy()
+                for event in events
+                if self._sequence_newer(event, min_sequence)
+            ]
         filtered: List[dict[str, Any]] = []
         for event in events:
-            timestamp = event.get("timestamp")
-            if not isinstance(timestamp, str):
-                continue
-            try:
-                parsed = datetime.fromisoformat(timestamp)
-            except ValueError:
-                continue
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            if parsed >= since:
+            parsed_ts = self._parse_timestamp(event.get("timestamp"))
+            if parsed_ts and parsed_ts >= since:
+                if min_sequence is not None and not self._sequence_newer(event, min_sequence):
+                    continue
                 filtered.append(event.copy())
         return filtered
 
@@ -239,13 +265,35 @@ class JobManager:
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "sequence": self._event_sequences.get(job_id, 0),
+            "event": "snapshot",
             "snapshot": payload,
         }
-        self._event_sequences[job_id] = entry["sequence"] + 1
+        sequence = int(entry["sequence"])
+        self._event_sequences[job_id] = sequence + 1
         log = self._event_logs.setdefault(job_id, [])
         log.append(entry)
         if len(log) > _EVENT_HISTORY_LIMIT:
             del log[: len(log) - _EVENT_HISTORY_LIMIT]
+        for queue in list(self._event_subscribers.get(job_id, [])):
+            queue.put_nowait(entry.copy())
+
+    def _parse_timestamp(self, raw: Any) -> datetime | None:
+        if not isinstance(raw, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    def _sequence_newer(self, event: Mapping[str, Any], min_sequence: int) -> bool:
+        try:
+            seq = int(event.get("sequence", -1))
+        except (TypeError, ValueError):
+            return False
+        return seq > min_sequence
 
     def _maybe_trigger_webhooks(self, job_id: str, payload: JobSnapshot) -> None:
         sender = self._webhook_sender

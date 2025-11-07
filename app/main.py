@@ -168,23 +168,22 @@ async def job_stream(job_id: str, request: Request) -> StreamingResponse:
 
 @app.get("/jobs/{job_id}/events")
 async def job_events(job_id: str, request: Request, since: str | None = None) -> StreamingResponse:
+    parsed_since = _parse_since(since)
     try:
-        initial_events = JOB_MANAGER.get_events(job_id, since=_parse_since(since))
-        queue = JOB_MANAGER.subscribe(job_id)
+        backlog, queue = JOB_MANAGER.subscribe_events(job_id, since=parsed_since)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc
-
-    last_sequence = initial_events[-1].get("sequence", -1) if initial_events else -1
 
     async def event_generator() -> AsyncIterator[str]:
         heartbeat = 0
         try:
-            for entry in initial_events:
+            for entry in backlog:
                 yield _serialize_log_entry(entry) + "\n"
-
             while True:
                 try:
-                    await asyncio.wait_for(queue.get(), timeout=5)
+                    event_entry = await asyncio.wait_for(queue.get(), timeout=5)
+                    heartbeat = 0
+                    yield _serialize_log_entry(event_entry) + "\n"
                 except asyncio.TimeoutError:
                     heartbeat += 1
                     heartbeat_entry = {
@@ -193,28 +192,10 @@ async def job_events(job_id: str, request: Request, since: str | None = None) ->
                         "data": {"count": heartbeat},
                     }
                     yield json.dumps(heartbeat_entry) + "\n"
-                    if await request.is_disconnected():
-                        break
-                    continue
-
-                events = JOB_MANAGER.get_events(job_id)
-                new_entries = [
-                    entry
-                    for entry in events
-                    if entry.get("sequence", -1) > last_sequence
-                ]
-                if not new_entries:
-                    if await request.is_disconnected():
-                        break
-                    continue
-                for entry in new_entries:
-                    seq = entry.get("sequence", last_sequence)
-                    max(last_sequence, seq)
-                    yield _serialize_log_entry(entry) + "\n"
                 if await request.is_disconnected():
                     break
         finally:
-            JOB_MANAGER.unsubscribe(job_id, queue)
+            JOB_MANAGER.unsubscribe_events(job_id, queue)
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 

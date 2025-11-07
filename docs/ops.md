@@ -39,6 +39,8 @@ uv run python scripts/run_smoke.py \
   - `benchmarks/production/latest_manifest_index.json`
   - `benchmarks/production/latest_summary.md`
   so dashboards/automation can point at a stable path.
+- Run `uv run python scripts/show_latest_smoke.py --manifest --limit 5` to quickly inspect
+  the latest pointers without opening files manually.
 
 ### Prerequisites
 - `/jobs` API available on `API_BASE_URL` with credentials in `.env`.
@@ -103,6 +105,10 @@ Publish the summary in Monday’s ops update and attach the most recent
   the secrets filled in once.
 - Override the API base temporarily via `--api-base https://staging.mdwb.internal`
   if you need to target a different environment.
-- `uv run python scripts/mdwb_cli.py events <job-id> --follow` tails the real
-  `/jobs/{id}/events` JSONL feed we expose for agents/automation; combine with
-  `--since` to resume from the last timestamp when running in cron or CI.
+- `uv run python scripts/mdwb_cli.py watch <job-id>` streams the human-friendly
+  view on `/jobs/{id}/events` (state/progress/warnings) and automatically falls
+  back to the SSE stream if the NDJSON endpoint is unavailable. Pass
+  `--raw/--since/--interval` to align with automation requirements.
+- `uv run python scripts/mdwb_cli.py events <job-id> --follow` tails the raw
+  `/jobs/{id}/events` NDJSON feed for pipelines; combine with `--since` to resume
+  from the last timestamp when running in cron or CI.

@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, TextIO, Tuple
+from typing import Any, Iterable, Optional, TextIO, Tuple
 
 import httpx
 import typer
@@ -19,8 +20,10 @@ console = Console()
 cli = typer.Typer(help="Interact with the Markdown Web Browser API")
 demo_cli = typer.Typer(help="Demo commands hitting the built-in /jobs/demo endpoints.")
 cli.add_typer(demo_cli, name="demo")
-jobs_cli = typer.Typer(help="Job management helpers (events, watch, tooling).")
+jobs_cli = typer.Typer(help="Job utilities (events/watch).")
 cli.add_typer(jobs_cli, name="jobs")
+warnings_cli = typer.Typer(help="Warning/blocklist log helpers.")
+cli.add_typer(warnings_cli, name="warnings")
 
 
 @dataclass
@@ -111,6 +114,34 @@ def _stream_job(job_id: str, settings: APISettings, *, raw: bool) -> None:
                     _log_event(event, payload)
 
 
+def _iter_event_lines(
+    job_id: str,
+    settings: APISettings,
+    *,
+    cursor: str | None,
+    follow: bool,
+    interval: float,
+):
+    client = _client(settings)
+    try:
+        while True:
+            params: dict[str, str] = {}
+            if cursor:
+                params["since"] = cursor
+            with client.stream("GET", f"/jobs/{job_id}/events", params=params) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    yield line
+                    cursor = _cursor_from_line(line, cursor)
+            if not follow:
+                break
+            time.sleep(interval)
+    finally:
+        client.close()
+
+
 def _watch_job_events(
     job_id: str,
     settings: APISettings,
@@ -120,56 +151,60 @@ def _watch_job_events(
     interval: float,
     output: TextIO,
 ) -> None:
-    client = _client(settings)
-    try:
-        while True:
-            params: dict[str, str] = {}
-            if cursor:
-                params["since"] = cursor
-            with client.stream("GET", f"/jobs/{job_id}/events", params=params) as response:
-                response.raise_for_status()
-                emitted = 0
-                for line in response.iter_lines():
-                    if not line:
-                        continue
-                    output.write(line + "\n")
-                    output.flush()
-                    cursor = _cursor_from_line(line, cursor)
-                    emitted += 1
-                if emitted == 0 and not cursor:
-                    console.print("[yellow]No events yet; will retry if following.[/]")
-            if not follow:
-                break
-            time.sleep(interval)
-    finally:
-        client.close()
+    for line in _iter_event_lines(job_id, settings, cursor=cursor, follow=follow, interval=interval):
+        output.write(line + "\n")
+        output.flush()
 
 
-def _poll_snapshots(
-    *,
+def _watch_job_events_pretty(
     job_id: str,
     settings: APISettings,
-    output: typer.FileTextWrite,
+    *,
+    cursor: str | None,
     follow: bool,
-    interval: float = 1.5,
+    interval: float,
+    raw: bool,
 ) -> None:
-    client = _client(settings)
-    terminal_states = {"DONE", "FAILED", "CANCELLED"}
-    try:
-        while True:
-            response = client.get(f"/jobs/{job_id}")
-            response.raise_for_status()
-            payload = response.json()
-            json.dump(payload, output)
-            output.write("\n")
-            output.flush()
-            state = str(payload.get("state", "")).upper()
-            if not follow or state in terminal_states:
+    terminal_states = {"DONE", "FAILED"}
+    for line in _iter_event_lines(job_id, settings, cursor=cursor, follow=follow, interval=interval):
+        if raw:
+            console.print(line)
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            console.print(line)
+            continue
+        snapshot = entry.get("snapshot")
+        if isinstance(snapshot, dict):
+            _render_snapshot(snapshot)
+            state = snapshot.get("state")
+            if follow and isinstance(state, str) and state.upper() in terminal_states:
                 break
-            time.sleep(interval)
-    finally:
-        client.close()
+        else:
+            console.print_json(data=entry)
 
+
+def _render_snapshot(snapshot: dict[str, Any]) -> None:
+    state = snapshot.get("state")
+    if state:
+        _log_event("state", str(state))
+    progress = snapshot.get("progress")
+    if isinstance(progress, dict):
+        done = progress.get("done", 0)
+        total = progress.get("total", 0)
+        _log_event("progress", f"{done} / {total} tiles")
+    manifest_path = snapshot.get("manifest_path")
+    if manifest_path:
+        _log_event("log", f"manifest: {manifest_path}")
+    manifest = snapshot.get("manifest")
+    if isinstance(manifest, dict):
+        warnings = manifest.get("warnings")
+        if warnings:
+            _log_event("warnings", json.dumps(warnings))
+    error = snapshot.get("error")
+    if error:
+        _log_event("log", json.dumps({"error": error}))
 
 @cli.command()
 def fetch(
@@ -178,7 +213,7 @@ def fetch(
     profile: Optional[str] = typer.Option(None, "--profile", help="Browser profile identifier"),
     ocr_policy: Optional[str] = typer.Option(None, "--ocr-policy", help="OCR policy/model id"),
     watch: bool = typer.Option(False, "--watch/--no-watch", help="Stream job progress after submission"),
-    raw: bool = typer.Option(False, "--raw", help="When watching, print raw SSE lines"),
+    raw: bool = typer.Option(False, "--raw", help="When watching, print raw NDJSON lines"),
     http2: bool = typer.Option(True, "--http2/--no-http2"),
 ) -> None:
     """Submit a new capture job and optionally stream progress."""
@@ -199,7 +234,20 @@ def fetch(
 
     if watch and job.get("id"):
         console.rule(f"Streaming {job['id']}")
-        _stream_job(job["id"], settings, raw=raw)
+        try:
+            _watch_job_events_pretty(
+                job["id"],
+                settings,
+                cursor=None,
+                follow=True,
+                interval=2.0,
+                raw=raw,
+            )
+        except httpx.HTTPError as exc:
+            console.print(
+                f"[yellow]Events feed unavailable ({exc}); falling back to SSE stream.[/]"
+            )
+            _stream_job(job["id"], settings, raw=raw)
 
 
 @cli.command()
@@ -244,6 +292,34 @@ def events(
 
     settings = _resolve_settings(api_base)
     _watch_job_events(job_id, settings, cursor=since, follow=follow, interval=interval, output=output)
+
+
+@cli.command()
+def watch(
+    job_id: str = typer.Argument(..., help="Job identifier"),
+    api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
+    since: Optional[str] = typer.Option(None, help="ISO timestamp cursor for incremental polling."),
+    follow: bool = typer.Option(True, "--follow/--once", help="Keep polling for new events instead of exiting."),
+    interval: float = typer.Option(2.0, "--interval", help="Polling interval in seconds when following."),
+    raw: bool = typer.Option(False, "--raw", help="Print raw NDJSON events instead of formatted output."),
+) -> None:
+    """Stream `/jobs/{id}/events` with optional fallback to SSE."""
+
+    settings = _resolve_settings(api_base)
+    try:
+        _watch_job_events_pretty(
+            job_id,
+            settings,
+            cursor=since,
+            follow=follow,
+            interval=interval,
+            raw=raw,
+        )
+    except httpx.HTTPError as exc:
+        console.print(
+            f"[yellow]Events feed unavailable ({exc}); falling back to SSE stream.[/]"
+        )
+        _stream_job(job_id, settings, raw=raw)
 
 
 @demo_cli.command("snapshot")
@@ -303,12 +379,133 @@ def _cursor_from_line(line: str, fallback: str | None) -> str | None:
     timestamp = entry.get("timestamp")
     snapshot = entry.get("snapshot")
     if timestamp:
-        return timestamp
+        return _bump_timestamp(timestamp)
     if isinstance(snapshot, dict):
         ts = snapshot.get("timestamp")
         if isinstance(ts, str):
-            return ts
+            return _bump_timestamp(ts)
     return fallback
+
+
+def _bump_timestamp(value: str) -> str:
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return (dt + timedelta(microseconds=1)).isoformat()
+
+
+def _load_warning_records(path: Path, limit: int) -> list[dict[str, Any]]:
+    if limit <= 0 or not path.exists():
+        return []
+    records: deque[dict[str, Any]] = deque(maxlen=limit)
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            records.append(payload)
+    return list(records)
+
+
+def _print_warning_records(records: list[dict[str, Any]], *, json_output: bool) -> None:
+    if not records:
+        console.print("[dim]No warning entries found.[/]")
+        return
+    if json_output:
+        for record in records:
+            console.print(json.dumps(record))
+        return
+    table = Table("timestamp", "job", "warnings", "blocklist", "sweep", "validation", title="Warning Log")
+    for row in _warning_rows(records):
+        table.add_row(*row)
+    console.print(table)
+
+
+def _warning_rows(records: Iterable[dict[str, Any]]) -> Iterable[tuple[str, str, str, str, str, str]]:
+    for record in records:
+        timestamp = record.get("timestamp", "-")
+        job = record.get("job_id", "-")
+        warnings = _format_warning_summary(record.get("warnings"))
+        blocklist = _format_blocklist(record.get("blocklist_hits"))
+        sweep = _format_sweep_summary(record)
+        validation = _format_validation_summary(record.get("validation_failures"))
+        yield (str(timestamp), str(job), warnings, blocklist, sweep, validation)
+
+
+def _format_warning_summary(values: Any) -> str:
+    if not isinstance(values, list) or not values:
+        return "-"
+    formatted: list[str] = []
+    for entry in values:
+        if not isinstance(entry, dict):
+            formatted.append(str(entry))
+            continue
+        code = entry.get("code", "?")
+        count = entry.get("count")
+        threshold = entry.get("threshold")
+        if count is not None and threshold is not None:
+            formatted.append(f"{code} ({count}/{threshold})")
+        elif count is not None:
+            formatted.append(f"{code} ({count})")
+        else:
+            formatted.append(str(code))
+    return "; ".join(formatted)
+
+
+def _format_blocklist(values: Any) -> str:
+    if not isinstance(values, dict) or not values:
+        return "-"
+    parts = [f"{selector}:{count}" for selector, count in values.items()]
+    return ", ".join(parts)
+
+
+def _format_sweep_summary(record: dict[str, Any]) -> str:
+    stats = record.get("sweep_stats")
+    if not isinstance(stats, dict):
+        stats = {}
+    parts: list[str] = []
+    shrink = stats.get("shrink_events")
+    retry = stats.get("retry_attempts")
+    overlap_pairs = stats.get("overlap_pairs")
+    if shrink:
+        parts.append(f"shrink={shrink}")
+    if retry:
+        parts.append(f"retry={retry}")
+    if overlap_pairs:
+        parts.append(f"pairs={overlap_pairs}")
+    ratio = record.get("overlap_match_ratio", stats.get("overlap_match_ratio"))
+    if isinstance(ratio, (int, float)):
+        parts.append(f"ratio={ratio:.2f}")
+    return ", ".join(parts) if parts else "-"
+
+
+def _format_validation_summary(values: Any) -> str:
+    if not isinstance(values, list) or not values:
+        return "-"
+    return "; ".join(str(entry) for entry in values)
+
+
+def _follow_warning_log(path: Path, *, json_output: bool, interval: float) -> None:
+    with path.open("r", encoding="utf-8") as handle:
+        handle.seek(0, os.SEEK_END)
+        while True:
+            line = handle.readline()
+            if not line:
+                time.sleep(interval)
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            _print_warning_records([record], json_output=json_output)
 
 
 @demo_cli.command("stream")
@@ -334,6 +531,33 @@ def demo_watch(api_base: Optional[str] = typer.Option(None, help="Override API b
     """Convenience alias for `demo stream`."""
 
     demo_stream(api_base=api_base)
+
+
+@warnings_cli.command("tail")
+def warnings_tail(
+    count: int = typer.Option(20, "--count", "-n", help="Number of entries to display."),
+    follow: bool = typer.Option(False, "--follow/--no-follow", help="Stream new entries as they arrive."),
+    interval: float = typer.Option(1.0, "--interval", help="Polling interval in seconds when following."),
+    json_output: bool = typer.Option(False, "--json", help="Emit raw JSON lines instead of a table."),
+    log_path: Optional[Path] = typer.Option(None, "--log-path", help="Override WARNING_LOG_PATH."),
+) -> None:
+    """Tail the structured warning/blocklist log."""
+
+    settings = _resolve_settings(None)
+    target_path = log_path or settings.warning_log_path
+    if not target_path.exists():
+        console.print(f"[yellow]Warning log not found at {target_path}[/]")
+        return
+
+    records = _load_warning_records(target_path, count)
+    _print_warning_records(records, json_output=json_output)
+
+    if follow:
+        console.print(f"[dim]Following {target_path} (Ctrl+C to stop)...[/]")
+        try:
+            _follow_warning_log(target_path, json_output=json_output, interval=interval)
+        except KeyboardInterrupt:  # pragma: no cover - manual interaction
+            console.print("[dim]Stopped tailing warning log.[/]")
 
 
 @demo_cli.command("events")

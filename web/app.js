@@ -1,5 +1,5 @@
 const MAX_EVENT_ROWS = 50;
-const EVENTS_POLL_INTERVAL_MS = 2000;
+const EVENTS_RETRY_INTERVAL_MS = 2000;
 const EMBEDDING_DIM = 1536;
 const WARNING_LABELS = {
   'canvas-heavy': 'Canvas Heavy',
@@ -503,6 +503,7 @@ function initEventsPanel(root) {
   }
   const statusEl = root.querySelector('[data-events-status]');
   let abortController = null;
+  let streamTask = null;
   let activeJobId = root.dataset.jobId || 'demo';
   let cursor = null;
 
@@ -526,16 +527,18 @@ function initEventsPanel(root) {
     const summary = document.createElement('div');
     summary.className = 'event-feed__summary';
     const snapshot = entry.snapshot || {};
-    const state = snapshot.state || '—';
+    let details = snapshot.state || entry.event || 'snapshot';
     const progress = snapshot.progress || {};
-    const done = progress.done ?? 0;
-    const total = progress.total ?? 0;
-    let details = state;
+    const done = progress.done ?? null;
+    const total = progress.total ?? null;
     if (Number.isFinite(done) && Number.isFinite(total) && (done || total)) {
       details += ` · ${done}/${total} tiles`;
     }
     if (snapshot.error) {
       details += ` · ${snapshot.error}`;
+    }
+    if (!snapshot.state && entry.event && entry.event !== 'snapshot') {
+      details = `${entry.event}${entry.data?.count ? ` #${entry.data.count}` : ''}`;
     }
     summary.textContent = details;
     item.append(meta, summary);
@@ -545,46 +548,78 @@ function initEventsPanel(root) {
     }
   };
 
-  const poll = async () => {
+  const handleLine = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    try {
+      const entry = JSON.parse(trimmed);
+      const kind = entry.event || 'snapshot';
+      if (kind === 'heartbeat') {
+        setStatus(`Heartbeat ${entry.data?.count ?? ''}`.trim(), 'pending');
+      } else if (entry.snapshot) {
+        appendEntry(entry);
+        setStatus(`Event ${entry.sequence ?? '—'} received.`, 'success');
+      }
+      if (entry.timestamp) {
+        cursor = entry.timestamp;
+      }
+    } catch (error) {
+      console.error('Failed to parse events payload', error);
+    }
+  };
+
+  const streamOnce = async () => {
+    const params = new URLSearchParams();
+    if (cursor) {
+      params.set('since', cursor);
+    }
+    const template = root.dataset.eventsTemplate || '/jobs/{job_id}/events';
+    const response = await fetch(buildTemplateUrl(template, activeJobId, params), {
+      signal: abortController.signal,
+    });
+    if (response.status === 404) {
+      setStatus('Events feed not available yet.', 'warning');
+      await sleep(EVENTS_RETRY_INTERVAL_MS);
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    if (!(response.body?.getReader)) {
+      const text = await response.text();
+      text.split('\n').forEach(handleLine);
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    setStatus(`Streaming events for ${activeJobId}…`, 'success');
+    while (!abortController?.signal.aborted) {
+      const { value, done } = await reader.read();
+      if (done) {
+        buffer += decoder.decode();
+        if (buffer) {
+          buffer.split('\n').forEach(handleLine);
+        }
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex = buffer.indexOf('\n');
+      while (newlineIndex >= 0) {
+        const line = buffer.slice(0, newlineIndex);
+        handleLine(line);
+        buffer = buffer.slice(newlineIndex + 1);
+        newlineIndex = buffer.indexOf('\n');
+      }
+    }
+  };
+
+  const streamLoop = async () => {
     while (abortController && !abortController.signal.aborted) {
       try {
-        const params = new URLSearchParams();
-        if (cursor) {
-          params.set('since', cursor);
-        }
-        const template = root.dataset.eventsTemplate || '/jobs/{job_id}/events';
-        const response = await fetch(buildTemplateUrl(template, activeJobId, params), {
-          signal: abortController.signal,
-        });
-        if (response.status === 404) {
-          setStatus('Events feed not available yet.', 'warning');
-        } else if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        } else {
-          const text = await response.text();
-          let appended = 0;
-          text.split('\n').forEach((line) => {
-            const payload = line.trim();
-            if (!payload) {
-              return;
-            }
-            try {
-              const entry = JSON.parse(payload);
-              appendEntry(entry);
-              cursor = entry.timestamp || cursor;
-              appended += 1;
-            } catch (error) {
-              console.error('Failed to parse events payload', error);
-            }
-          });
-          if (cursor && appended === 0) {
-            setStatus(`No new events for ${activeJobId}.`, 'pending');
-          } else if (appended > 0) {
-            setStatus(`Received ${appended} event${appended === 1 ? '' : 's'}.`, 'success');
-          } else {
-            setStatus('No events yet for this job.', 'pending');
-          }
-        }
+        await streamOnce();
       } catch (error) {
         if (abortController?.signal.aborted) {
           return;
@@ -592,7 +627,10 @@ function initEventsPanel(root) {
         console.error('Events feed failed', error);
         setStatus(error.message || 'Events feed error', 'error');
       }
-      await sleep(EVENTS_POLL_INTERVAL_MS);
+      if (abortController?.signal.aborted) {
+        break;
+      }
+      await sleep(EVENTS_RETRY_INTERVAL_MS);
     }
   };
 
@@ -602,10 +640,10 @@ function initEventsPanel(root) {
     resetLog();
     stop();
     abortController = new AbortController();
-    setStatus(`Streaming events for ${activeJobId}…`, 'pending');
-    poll().catch((error) => {
+    setStatus(`Connecting to events for ${activeJobId}…`, 'pending');
+    streamTask = streamLoop().catch((error) => {
       if (!abortController?.signal.aborted) {
-        console.error('Events poll crashed', error);
+        console.error('Events stream crashed', error);
         setStatus(error.message || 'Events feed error', 'error');
       }
     });
@@ -616,6 +654,7 @@ function initEventsPanel(root) {
       abortController.abort();
       abortController = null;
     }
+    streamTask = null;
   };
 
   return { connect, stop };

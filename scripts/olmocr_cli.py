@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional, cast
+from typing import Iterable, Optional
 
 import httpx
 import typer
@@ -86,24 +86,34 @@ def _config_value(
         return default
 
 
+def _required_config(
+    config: DecoupleConfig,
+    name: str,
+    *,
+    default: Optional[str] = None,
+) -> str:
+    value = _config_value(config, name, default=default)
+    if value is None:
+        raise CLIError(f"{name} must be set in .env or provided with a default")
+    return value
+
+
 def load_settings() -> CLISettings:
     config = _load_decouple()
     return CLISettings(
-        api_base_url=cast(str, _config_value(config, "API_BASE_URL", default="http://localhost:8000")),
+        api_base_url=_required_config(config, "API_BASE_URL", default="http://localhost:8000"),
         mdwb_api_key=_config_value(config, "MDWB_API_KEY"),
-        ocr_server=cast(
-            str, _config_value(config, "OLMOCR_SERVER", default="https://ai2endpoints.cirrascale.ai/api")
-        ),
-        ocr_model=cast(str, _config_value(config, "OLMOCR_MODEL", default="olmOCR-2-7B-1025-FP8")),
+        ocr_server=_required_config(config, "OLMOCR_SERVER", default="https://ai2endpoints.cirrascale.ai/api"),
+        ocr_model=_required_config(config, "OLMOCR_MODEL", default="olmOCR-2-7B-1025-FP8"),
         ocr_api_key=_config_value(config, "OLMOCR_API_KEY"),
-        tiles_long_side=int(_config_value(config, "TILE_LONG_SIDE_PX", default="1288")),
-        tile_overlap_px=int(_config_value(config, "TILE_OVERLAP_PX", default="120")),
-        viewport_overlap_px=int(_config_value(config, "VIEWPORT_OVERLAP_PX", default="120")),
-        concurrency_min=int(_config_value(config, "OCR_MIN_CONCURRENCY", default="2")),
-        concurrency_max=int(_config_value(config, "OCR_MAX_CONCURRENCY", default="8")),
-        cft_version=cast(str, _config_value(config, "CFT_VERSION", default="unknown")),
-        cft_label=cast(str, _config_value(config, "CFT_LABEL", default="")),
-        playwright_channel=cast(str, _config_value(config, "PLAYWRIGHT_CHANNEL", default="cft")),
+        tiles_long_side=int(_required_config(config, "TILE_LONG_SIDE_PX", default="1288")),
+        tile_overlap_px=int(_required_config(config, "TILE_OVERLAP_PX", default="120")),
+        viewport_overlap_px=int(_required_config(config, "VIEWPORT_OVERLAP_PX", default="120")),
+        concurrency_min=int(_required_config(config, "OCR_MIN_CONCURRENCY", default="2")),
+        concurrency_max=int(_required_config(config, "OCR_MAX_CONCURRENCY", default="8")),
+        cft_version=_required_config(config, "CFT_VERSION", default="unknown"),
+        cft_label=_required_config(config, "CFT_LABEL", default=""),
+        playwright_channel=_required_config(config, "PLAYWRIGHT_CHANNEL", default="cft"),
         screenshot_style_hash=_config_value(config, "SCREENSHOT_STYLE_HASH", default=None),
     )
 

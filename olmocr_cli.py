@@ -383,7 +383,7 @@ def run(
     )
     extra_args = extra_args if extra_args is not None else config_defaults.get("extra_args")
     server_url = server_url if server_url is not None else config_defaults.get("server_url")
-    server_model or config_defaults.get("server_model", "olmocr")
+    server_model_name: str = server_model or config_defaults.get("server_model", "olmocr")
     resume = resume if resume is not None else config_defaults.get("resume", True)
     visible_gpus = visible_gpus if visible_gpus is not None else config_defaults.get("visible_gpus")
 
@@ -745,14 +745,15 @@ def _run_with_filtered_output(cmd: List[str], env: dict, total_items: Optional[i
         text=True,
         bufsize=1,
     )
-    stdout = process.stdout
-    if stdout is None:  # pragma: no cover - defensive guard
+    stdout_pipe = process.stdout
+    if stdout_pipe is None:  # pragma: no cover - defensive guard
         raise RuntimeError("stdout pipe was not created")
+    text_stream = stdout_pipe
     start_time = time.time()
     suppressed_attempts = 0
     last_processed = -1
     while True:
-        line = stdout.readline()
+        line = text_stream.readline()
         if not line:
             break
         stripped = line.rstrip()
