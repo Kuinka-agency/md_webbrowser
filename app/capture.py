@@ -113,6 +113,7 @@ async def capture_tiles(config: CaptureConfig) -> CaptureResult:
                 blocklist_hits,
                 warnings,
                 dom_snapshot,
+                validation_failures,
             ) = await _perform_viewport_sweeps(
                 context,
                 config,
@@ -159,7 +160,7 @@ async def capture_tiles(config: CaptureConfig) -> CaptureResult:
         blocklist_hits=blocklist_hits,
         warnings=warnings,
         overlap_match_ratio=sweep_stats.overlap_match_ratio,
-        validation_failures=[],
+        validation_failures=validation_failures,
     )
 
     return CaptureResult(tiles=tiles, manifest=manifest_payload, dom_snapshot=dom_snapshot)
@@ -178,7 +179,15 @@ async def _perform_viewport_sweeps(
     shrink_retry_limit: int,
     blocklist_config: BlocklistConfig,
     warning_settings: WarningSettings,
-) -> tuple[List[TileSlice], SweepStats, str, dict[str, int], list[CaptureWarningEntry], bytes | None]:
+) -> tuple[
+    List[TileSlice],
+    SweepStats,
+    str,
+    dict[str, int],
+    list[CaptureWarningEntry],
+    bytes | None,
+    list[str],
+]:
     page = await context.new_page()
     await _mask_automation(page)
     mask_locators = [page.locator(selector) for selector in mask_selectors]
@@ -195,6 +204,7 @@ async def _perform_viewport_sweeps(
     overlap_matches = 0
     tile_index = 0
     tiles: List[TileSlice] = []
+    validation_failures: list[str] = []
     viewport_step = max(1, config.viewport_height - viewport_overlap_px)
 
     scroll_height = await _scroll_height(page)
@@ -216,7 +226,12 @@ async def _perform_viewport_sweeps(
             viewport_y_offset=y_offset,
             target_long_side_px=target_long_side_px,
         )
-        validate_tiles(new_tiles)
+        try:
+            validate_tiles(new_tiles)
+        except ValueError as exc:
+            failure = f"viewport sweep {sweep_count}: {exc}"
+            validation_failures.append(failure)
+            raise
         for tile in new_tiles:
             if previous_tile:
                 match = _overlap_match(previous_tile, tile)
@@ -275,7 +290,7 @@ async def _perform_viewport_sweeps(
     )
     warning_entries.extend(sweep_warnings)
     dom_bytes: bytes | None = dom_html.encode("utf-8") if dom_html else None
-    return tiles, stats, user_agent, blocklist_hits, warning_entries, dom_bytes
+    return tiles, stats, user_agent, blocklist_hits, warning_entries, dom_bytes, validation_failures
 
 
 _CHANNEL_ALIASES = {

@@ -77,6 +77,8 @@ in `app/schemas.py` (see `ManifestEnvironment`, `ManifestTimings`, and
 * Viewport + overlap metadata (width/height/DSF, long-side policy, settle timers, mask selectors)
 * Screenshot style hash for the masked/blocked CSS bundle
 * Warning entries (canvas/video-heavy) with counts + thresholds so Ops can escalate overlays
+* Sweep stats (`sweep_stats`) that show shrink events, retry attempts, and overlap match ratios to explain seam trims or viewport restarts
+* `validation_failures` array that records any tile integrity errors caught by `validate_tiles()` and feeds the warning log even when no other warnings fired
 * OCR model + FP8 status + concurrency window
 * Timing metrics (`capture_ms`, `ocr_ms`, `stitch_ms`, `total_ms`) once stages
   execute
@@ -125,3 +127,4 @@ in `app/schemas.py` (see `ManifestEnvironment`, `ManifestTimings`, and
   correlate spikes.
 * Prometheus + HTMX SSE heartbeat intervals come directly from this config—keep
   dashboards/tests in sync with any changes.
+* The warning/blocklist JSONL log now includes `sweep_stats`, overlap ratios, and any `validation_failures`, so Ops can spot retries or seam duplication even when DOM warnings don’t fire. Ensure the log rotation/search tooling ingests the new keys.

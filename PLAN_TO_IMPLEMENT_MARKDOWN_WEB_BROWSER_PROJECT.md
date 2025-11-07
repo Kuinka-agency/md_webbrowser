@@ -192,7 +192,8 @@ _2025-11-08 — Added BeautifulSoup-powered DOM snapshot parsing so `extract_lin
 - Canvas/WebGL-first content → emit warning banner + attach raw tile thumbnail next to Markdown block.
 - Anti-automation overlays → blocklist injection + UI toggle for per-domain overrides.
 _2025-11-08 — BrownStone (bd-dm9) introduced JSON-backed selector blocklist + capture warnings; manifests now log `blocklist_hits` + warning codes for SSE/UI surfacing. PinkCreek added `scripts/mdwb_cli.py demo` helpers so the CLI can render these warnings/links using the shared `.env` config._
-- Scroll shrink / poor overlap → capture now emits `scroll-shrink` and `overlap-low` warnings whenever viewport sweeps retry due to shrinking SPAs or overlap match ratios fall below the configured threshold (defaults: 1 shrink event, 0.65 ratio). _2025-11-08 — BrownStone (bd-dm9)._ 
+- Scroll shrink / poor overlap → capture now emits `scroll-shrink` and `overlap-low` warnings whenever viewport sweeps retry due to shrinking SPAs or overlap match ratios fall below the configured threshold (defaults: 1 shrink event, 0.65 ratio). _2025-11-08 — BrownStone (bd-dm9)._
+_2025-11-08 — WhiteSnow (bd-dm9) added sweep stats + `validation_failures` to CaptureManifest and the ops warning log so retries and duplicate seams show up even when no DOM warnings fire._
 - Server overload → adaptive OCR concurrency, queue visibility, remote/local failover.
 - Partial results → stream partial Markdown as tiles finish; mark sections as incomplete with provenance comments.
 - Full-page retries → viewport sweep restarts when shrink detected; record both sweeps.
@@ -245,6 +246,7 @@ mdwb fetch https://example.com \
 ```
 
 _2025-11-08 — PurpleDog (bd-dwf) added the initial Typer/Rich CLI scaffold (`scripts/mdwb_cli.py`) with demo `snapshot/links/stream/watch/events/warnings` commands powered by the `/jobs/demo/*` endpoints (including `--json`/`--raw` output + manifest warning/blocklist rendering), `mdwb dom links` for offline DOM snapshot parsing, and the first real `/jobs` commands (`mdwb fetch/show/stream/watch`) wired to the JobManager SSE feed / polling API (fetch supports `--watch`) while `mdwb watch` falls back to polling until `/jobs/{id}/events` lands._
+_2025-11-08 — BlueCreek (bd-e1x) fixed the `mdwb images` workflow so it no longer references `files` before assignment; the command now validates directories up front, short-circuits when empty, and reuses the computed manifest for preconvert/resume._
 
 _2025-11-08 — RunPaths now tracks `dom_snapshot_path` and the capture pipeline writes each job’s DOM HTML plus extracted `links.json` to disk (`Store.write_dom_snapshot` + `write_links`), with `GET /jobs/{job_id}/links.json` + `mdwb dom links --job-id …` surfacing the data._
 

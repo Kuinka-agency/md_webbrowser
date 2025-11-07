@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from app.schemas import ManifestWarning
 from app.settings import get_settings
@@ -35,10 +35,37 @@ def append_warning_log(
     blocklist stats. No-op when neither warnings nor blocklist hits exist.
     """
 
+    settings = get_settings()
     warning_entries = getattr(manifest, "warnings", []) or []
     warnings = [_normalize_warning(entry) for entry in warning_entries]
     blocklist_hits = getattr(manifest, "blocklist_hits", {}) or {}
-    if not warnings and not blocklist_hits:
+    validation_failures = list(getattr(manifest, "validation_failures", []) or [])
+    sweep_stats = _coerce_mapping(getattr(manifest, "sweep_stats", None))
+    overlap_ratio = getattr(manifest, "overlap_match_ratio", None)
+    if overlap_ratio is None and sweep_stats:
+        overlap_ratio = sweep_stats.get("overlap_match_ratio")
+
+    should_log = bool(warnings or blocklist_hits or validation_failures)
+    if not should_log and sweep_stats:
+        retried = int(sweep_stats.get("retry_attempts") or 0) > 0
+        shrank = int(sweep_stats.get("shrink_events") or 0) > 0
+        should_log = retried or shrank
+    if not should_log and sweep_stats and overlap_ratio is not None:
+        overlap_pairs = int(sweep_stats.get("overlap_pairs") or 0)
+        warn_cfg = settings.warnings
+        seam_condition = (
+            warn_cfg.seam_warning_ratio > 0
+            and overlap_pairs >= warn_cfg.seam_warning_min_pairs
+            and overlap_ratio >= warn_cfg.seam_warning_ratio
+        )
+        overlap_condition = (
+            warn_cfg.overlap_warning_ratio > 0
+            and overlap_pairs > 0
+            and overlap_ratio < warn_cfg.overlap_warning_ratio
+        )
+        should_log = seam_condition or overlap_condition
+
+    if not should_log:
         return
 
     record = {
@@ -49,8 +76,32 @@ def append_warning_log(
         "blocklist_version": getattr(manifest, "blocklist_version", None),
         "blocklist_hits": blocklist_hits,
     }
-    log_path = get_settings().logging.warning_log_path
+    if sweep_stats:
+        record["sweep_stats"] = sweep_stats
+    if overlap_ratio is not None:
+        record["overlap_match_ratio"] = overlap_ratio
+    if validation_failures:
+        record["validation_failures"] = validation_failures
+
+    log_path = settings.logging.warning_log_path
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record))
         handle.write("\n")
+
+
+def _coerce_mapping(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return dict(value)
+    if is_dataclass(value):
+        return asdict(value)
+    if hasattr(value, "model_dump"):
+        try:
+            data = value.model_dump()
+            if isinstance(data, dict):
+                return data
+        except Exception:  # pragma: no cover - defensive
+            return None
+    return None

@@ -1,4 +1,5 @@
 const MAX_EVENT_ROWS = 50;
+const EVENTS_POLL_INTERVAL_MS = 2000;
 const EMBEDDING_DIM = 1536;
 const WARNING_LABELS = {
   'canvas-heavy': 'Canvas Heavy',
@@ -41,32 +42,21 @@ function initSseBridge() {
   const root = document.querySelector('[data-stream-root]');
   const statusEl = document.getElementById('job-sse-status');
   if (!root || !statusEl) {
-    return;
+    return null;
   }
   const embeddingsPanel = initEmbeddingsPanel(root);
+  const eventsPanel = initEventsPanel(root);
 
   const fieldMap = new Map();
   root.querySelectorAll('[data-sse-field]').forEach((el) => {
     fieldMap.set(el.dataset.sseField, el);
   });
-  const logEl = root.querySelector('[data-sse-log]');
   const warningListEl = root.querySelector('[data-warning-list]');
   const blocklistHitsEl = root.querySelector('[data-blocklist-hits]');
 
-  const setStatus = (value) => {
+  const setStatus = (value, variant = 'info') => {
     statusEl.textContent = value;
-  };
-
-  const appendLog = (html) => {
-    if (!logEl) {
-      return;
-    }
-    const entry = document.createElement('li');
-    entry.innerHTML = html;
-    logEl.prepend(entry);
-    while (logEl.children.length > MAX_EVENT_ROWS) {
-      logEl.removeChild(logEl.lastChild);
-    }
+    statusEl.dataset.variant = variant;
   };
 
   const updateField = (field, payload) => {
@@ -92,24 +82,74 @@ function initSseBridge() {
     }
   };
 
+  const fetchTemplateJson = async (template, jobId) => {
+    const target = buildTemplateUrl(template, jobId);
+    const response = await fetch(target);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return response.json();
+  };
+
+  const refreshLinks = async (jobId) => {
+    if (!root) {
+      return;
+    }
+    const template = root.dataset.linksTemplate || '/jobs/{job_id}/links.json';
+    try {
+      const data = await fetchTemplateJson(template, jobId);
+      updateField('links', JSON.stringify(data));
+    } catch (error) {
+      console.error('Failed to refresh links', error);
+    }
+  };
+
+  const refreshManifest = async (jobId) => {
+    if (!root) {
+      return;
+    }
+    const template = root.dataset.manifestTemplate || '/jobs/{job_id}/manifest.json';
+    try {
+      const data = await fetchTemplateJson(template, jobId);
+      updateField('manifest', JSON.stringify(data));
+    } catch (error) {
+      if (!(error?.message || '').includes('404')) {
+        console.error('Failed to refresh manifest', error);
+      }
+    }
+  };
+
   let source = null;
+  let currentJobId = root.dataset.jobId || 'demo';
 
   const connect = (jobId) => {
     if (source) {
       source.close();
     }
     const template = root.dataset.streamTemplate || '/jobs/{job_id}/stream';
-    const url = template.replace('{job_id}', jobId || 'demo');
-    root.dataset.jobId = jobId;
+    currentJobId = jobId || 'demo';
+    const url = buildTemplateUrl(template, currentJobId);
+    root.dataset.jobId = currentJobId;
     const jobField = document.getElementById('job-id');
     if (jobField) {
-      jobField.value = jobId;
+      jobField.value = currentJobId;
     }
     source = new EventSource(url);
-    setStatus('Connecting…');
-    source.addEventListener('open', () => setStatus(`Connected (${jobId})`));
-    source.addEventListener('error', () => setStatus('Retrying…'));
-    source.addEventListener('state', (event) => updateField('state', event.data));
+    setStatus('Connecting…', 'pending');
+    embeddingsPanel?.setJobId(currentJobId);
+    eventsPanel?.connect(currentJobId);
+    refreshManifest(currentJobId);
+    refreshLinks(currentJobId);
+    source.addEventListener('open', () => setStatus(`Connected (${currentJobId})`, 'success'));
+    source.addEventListener('error', () => setStatus('Disconnected — retrying…', 'warning'));
+    source.addEventListener('state', (event) => {
+      updateField('state', event.data);
+      const normalized = (event.data || '').trim().toUpperCase();
+      if (normalized === 'DONE' || normalized === 'FAILED') {
+        refreshManifest(currentJobId);
+        refreshLinks(currentJobId);
+      }
+    });
     source.addEventListener('progress', (event) => updateField('progress', event.data));
     source.addEventListener('runtime', (event) => updateField('runtime', event.data));
     source.addEventListener('manifest', (event) => updateField('manifest', event.data));
@@ -117,9 +157,7 @@ function initSseBridge() {
     source.addEventListener('raw', (event) => updateField('raw', event.data));
     source.addEventListener('links', (event) => updateField('links', event.data));
     source.addEventListener('artifacts', (event) => updateField('artifacts', event.data));
-    source.addEventListener('log', (event) => appendLog(event.data));
     source.addEventListener('warnings', (event) => renderWarnings(warningListEl, event.data));
-    embeddingsPanel?.setJobId(jobId);
   };
 
   const defaultJob = root.dataset.jobId || 'demo';
@@ -129,9 +167,10 @@ function initSseBridge() {
     if (source) {
       source.close();
     }
+    eventsPanel?.stop?.();
   });
 
-  return { connect };
+  return { connect, refreshLinks };
 }
 
 function renderManifest(element, payload, { warningListEl, blocklistHitsEl }) {
@@ -435,7 +474,7 @@ function initStreamControls(sse) {
   const ocrSelect = document.getElementById('ocr-policy');
   const root = document.querySelector('[data-stream-root]');
   const statusEl = document.querySelector('[data-run-status]');
-  if (!runButton || !jobInput || !root || !sse) {
+  if (!runButton || !jobInput || !root || !sse?.connect) {
     return;
   }
 

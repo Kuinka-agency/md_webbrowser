@@ -109,6 +109,43 @@ def _stream_job(job_id: str, settings: APISettings, *, raw: bool) -> None:
                     _log_event(event, payload)
 
 
+def _stream_events(job_id: str, settings: APISettings, output: typer.FileTextWrite) -> None:
+    with httpx.Client(base_url=settings.base_url, timeout=None, headers=_auth_headers(settings)) as client:
+        with client.stream("GET", f"/jobs/{job_id}/events") as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                output.write(line + "\n")
+                output.flush()
+
+
+def _poll_snapshots(
+    *,
+    job_id: str,
+    settings: APISettings,
+    output: typer.FileTextWrite,
+    follow: bool,
+    interval: float = 1.5,
+) -> None:
+    client = _client(settings)
+    terminal_states = {"DONE", "FAILED", "CANCELLED"}
+    try:
+        while True:
+            response = client.get(f"/jobs/{job_id}")
+            response.raise_for_status()
+            payload = response.json()
+            json.dump(payload, output)
+            output.write("\n")
+            output.flush()
+            state = str(payload.get("state", "")).upper()
+            if not follow or state in terminal_states:
+                break
+            time.sleep(interval)
+    finally:
+        client.close()
+
+
 @cli.command()
 def fetch(
     url: str = typer.Argument(..., help="URL to capture"),
@@ -175,14 +212,10 @@ def events(
         "-", "--output", "-o", help="File to append NDJSON events to (default stdout)."
     ),
 ) -> None:
-    """Tail `/jobs/{id}/events` once available (polling fallback)."""
+    """Tail `/jobs/{id}/events` (NDJSON feed)."""
 
     settings = _resolve_settings(api_base)
-    try:
-        _stream_events(job_id, settings, output=output)
-    except httpx.HTTPError:
-        console.print("[yellow]/jobs/{id}/events not available yet; falling back to polling snapshots.[/]")
-        _poll_snapshots(job_id=job_id, settings=settings, output=output, follow=True)
+    _stream_events(job_id, settings, output=output)
 
 
 @demo_cli.command("snapshot")

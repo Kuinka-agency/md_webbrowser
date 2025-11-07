@@ -13,6 +13,8 @@
       data-stream-template="/jobs/{job_id}/stream"
       data-job-id="demo"
       data-links-template="/jobs/{job_id}/links.json"
+      data-manifest-template="/jobs/{job_id}/manifest.json"
+      data-events-template="/jobs/{job_id}/events"
     >
       <header class="toolbar">
         <div class="toolbar__group">
@@ -142,7 +144,8 @@
           </article>
           <article class="tab-panel" data-tab-panel="events" hidden>
             <h2>Event Feed</h2>
-            <ul class="event-feed" id="events-log" data-sse-log></ul>
+            <p class="events-status" data-events-status>Attach to a job to stream event history.</p>
+            <ul class="event-feed" id="events-log" data-events-log></ul>
           </article>
         </div>
       </section>

@@ -209,6 +209,33 @@ body {
   font-weight: 600;
 }
 
+.status-value[data-variant="success"] {
+  color: #16a34a;
+}
+
+.status-value[data-variant="error"] {
+  color: #dc2626;
+}
+
+.status-value[data-variant="warning"],
+.status-value[data-variant="pending"] {
+  color: #d97706;
+}
+
+.events-status {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.events-status[data-variant="error"] {
+  color: #dc2626;
+}
+
+.events-status[data-variant="success"] {
+  color: #16a34a;
+}
+
 .tabs {
   background: var(--surface);
   border: 1px solid var(--border);
