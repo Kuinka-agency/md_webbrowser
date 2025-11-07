@@ -93,3 +93,6 @@ Publish the summary in Monday’s ops update and attach the most recent
   the secrets filled in once.
 - Override the API base temporarily via `--api-base https://staging.mdwb.internal`
   if you need to target a different environment.
+- `uv run python scripts/mdwb_cli.py events <job-id> --follow` tails the real
+  `/jobs/{id}/events` JSONL feed we expose for agents/automation; combine with
+  `--since` to resume from the last timestamp when running in cron or CI.

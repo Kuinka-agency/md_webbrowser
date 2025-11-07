@@ -54,6 +54,7 @@ print(settings.ocr.server_url)
 | `SCREENSHOT_STYLE_HASH` | auto-derived if blank | Hash of viewport/mask settings included in manifests & bug reports. |
 | `PROMETHEUS_PORT` | `9000` | Port for the Prometheus metrics endpoint. |
 | `HTMX_SSE_HEARTBEAT_MS` | `4000` | Interval (ms) for SSE heartbeat events streamed to the UI. |
+| `WEBHOOK_SECRET` | `mdwb-dev-webhook` | Shared secret used to sign `/jobs/{id}/webhooks` callbacks. |
 
 Add any new variables to `.env.example`, document them here, and update the
 manifest schema if they need to be echoed downstream.

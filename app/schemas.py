@@ -147,4 +147,3 @@ class WebhookRegistrationRequest(BaseModel):
         default=None,
         description="States that should trigger the webhook (defaults to DONE/FAILED)",
     )
-    warnings: list[ManifestWarning] = Field(default_factory=list)

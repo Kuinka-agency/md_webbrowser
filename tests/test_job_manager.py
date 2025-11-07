@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -75,3 +76,41 @@ async def test_job_manager_snapshot_queue(tmp_path: Path):
 
     assert JobState.BROWSER_STARTING.value in states
     assert states[-1] == JobState.DONE.value
+
+
+@pytest.mark.asyncio
+async def test_job_manager_events_since(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    manager = JobManager(store=Store(config), runner=_fake_runner)
+    snapshot = await manager.create_job(JobCreateRequest(url="https://example.com/events"))
+    job_id = snapshot["id"]
+
+    await manager._tasks[job_id]
+    events = manager.get_events(job_id)
+    assert events, "expected events to be recorded"
+    assert events[-1]["snapshot"]["state"] == JobState.DONE.value
+
+    last_timestamp = datetime.fromisoformat(events[-1]["timestamp"])
+    filtered = manager.get_events(job_id, since=last_timestamp)
+    assert filtered
+    assert filtered[0]["timestamp"] == events[-1]["timestamp"]
+
+
+@pytest.mark.asyncio
+async def test_job_manager_webhook_delivery(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    sent: list[dict] = []
+
+    async def _sender(url: str, payload: dict):  # noqa: ANN001
+        sent.append({"url": url, "payload": payload})
+
+    manager = JobManager(store=Store(config), runner=_fake_runner, webhook_sender=_sender)
+    snapshot = await manager.create_job(JobCreateRequest(url="https://example.com/hook"))
+    job_id = snapshot["id"]
+
+    manager.register_webhook(job_id, url="https://example.com/webhook", events=[JobState.DONE.value])
+    await manager._tasks[job_id]
+    await asyncio.sleep(0)
+
+    assert sent, "webhook sender should be invoked"
+    assert sent[-1]["payload"]["state"] == JobState.DONE.value

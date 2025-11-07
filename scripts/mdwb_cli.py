@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
@@ -108,6 +109,47 @@ def _stream_job(job_id: str, settings: APISettings, *, raw: bool) -> None:
                     _log_event(event, payload)
 
 
+def _stream_events(job_id: str, settings: APISettings) -> None:
+    with httpx.Client(base_url=settings.base_url, timeout=None, headers=_auth_headers(settings)) as client:
+        with client.stream("GET", f"/jobs/{job_id}/events") as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    console.print(line)
+                    continue
+                console.print_json(data=record)
+
+
+def _poll_snapshots(
+    *,
+    job_id: str,
+    settings: APISettings,
+    output: typer.FileTextWrite,
+    follow: bool,
+    interval: float = 1.5,
+) -> None:
+    client = _client(settings)
+    terminal_states = {"DONE", "FAILED", "CANCELLED"}
+    while True:
+        response = client.get(f"/jobs/{job_id}")
+        response.raise_for_status()
+        payload = response.json()
+        json.dump(payload, output)
+        output.write("\n")
+        output.flush()
+        state = str(payload.get("state", "")).upper()
+        if not follow or state in terminal_states:
+            break
+        try:
+            typer.sleep(interval)
+        except KeyboardInterrupt:  # pragma: no cover
+            break
+
+
 @cli.command()
 def fetch(
     url: str = typer.Argument(..., help="URL to capture"),
@@ -167,35 +209,80 @@ def stream(
 
 
 @cli.command()
+def events(
+    job_id: str = typer.Argument(..., help="Job identifier"),
+    api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
+    since: Optional[str] = typer.Option(None, help="ISO timestamp cursor for incremental polling."),
+    follow: bool = typer.Option(False, "--follow/--no-follow", help="Continue polling for new events."),
+    interval: float = typer.Option(2.0, "--interval", help="Polling interval in seconds when following."),
+    output: typer.FileTextWrite = typer.Option(
+        "-", "--output", "-o", help="File to append NDJSON events to (default stdout)."
+    ),
+) -> None:
+    """Fetch newline-delimited job events (JSONL)."""
+
+    settings = _resolve_settings(api_base)
+    client = _client(settings)
+    cursor = since
+    try:
+        while True:
+            params: dict[str, str] = {}
+            if cursor:
+                params["since"] = cursor
+            response = client.get(f"/jobs/{job_id}/events", params=params)
+            response.raise_for_status()
+            emitted = 0
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                output.write(line + "\n")
+                output.flush()
+                emitted += 1
+                cursor = _cursor_from_line(line, cursor)
+            if not follow:
+                break
+            if emitted == 0:
+                time.sleep(interval)
+            else:
+                time.sleep(interval)
+    finally:
+        client.close()
+
+
+@cli.command("events")
+def events_stream(
+    job_id: str = typer.Argument(..., help="Job identifier"),
+    api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
+) -> None:
+    """Stream newline-delimited events for a job."""
+
+    settings = _resolve_settings(api_base)
+    _stream_events(job_id, settings)
+
+
+@cli.command()
 def watch(
     job_id: str = typer.Argument(..., help="Job identifier"),
     api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
-    interval: float = typer.Option(1.5, "--interval", help="Seconds between polls"),
-    json_output: bool = typer.Option(False, "--json", help="Emit JSON snapshots"),
-    stop_on_done: bool = typer.Option(True, "--stop/--no-stop", help="Exit when terminal state reached"),
-    http2: bool = typer.Option(True, "--http2/--no-http2"),
+    output: typer.FileTextWrite = typer.Option("-", "--output", "-o", help="File to append JSON events to"),
+    follow: bool = typer.Option(True, "--follow/--no-follow", help="Keep streaming until DONE"),
 ) -> None:
-    """Poll `/jobs/{id}` until completion, printing snapshots."""
+    """Tail the forthcoming `/jobs/{id}/events` JSONLines feed (demo fallback until API lands)."""
 
     settings = _resolve_settings(api_base)
-    client = _client(settings, http2=http2)
-    terminal_states = {"DONE", "FAILED", "CANCELLED"}
-
-    while True:
-        response = client.get(f"/jobs/{job_id}")
-        response.raise_for_status()
-        snapshot = response.json()
-        if json_output:
-            console.print_json(data=snapshot)
-        else:
-            _print_job(snapshot)
-        state = str(snapshot.get("state", ""))
-        if stop_on_done and state.upper() in terminal_states:
-            break
-        try:
-            typer.sleep(interval)
-        except KeyboardInterrupt:  # pragma: no cover
-            break
+    try:
+        with httpx.Client(base_url=settings.base_url, timeout=None, headers=_auth_headers(settings)) as client:
+            with client.stream("GET", f"/jobs/{job_id}/events") as response:
+                if response.status_code >= 400:
+                    raise httpx.HTTPStatusError("events endpoint not ready", request=response.request, response=response)
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    output.write(line + "\n")
+                    output.flush()
+    except httpx.HTTPStatusError:
+        console.print("[yellow]/jobs/{id}/events not available yet; falling back to polling snapshots.[/]")
+        _poll_snapshots(job_id=job_id, settings=settings, output=output, follow=follow)
 
 
 @demo_cli.command("snapshot")
@@ -247,6 +334,22 @@ def _log_event(event: str, payload: str) -> None:
         console.print(f"[bold]{event}[/]: {payload}")
 
 
+def _cursor_from_line(line: str, fallback: str | None) -> str | None:
+    try:
+        entry = json.loads(line)
+    except json.JSONDecodeError:
+        return fallback
+    timestamp = entry.get("timestamp")
+    snapshot = entry.get("snapshot")
+    if timestamp:
+        return timestamp
+    if isinstance(snapshot, dict):
+        ts = snapshot.get("timestamp")
+        if isinstance(ts, str):
+            return ts
+    return fallback
+
+
 @demo_cli.command("stream")
 def demo_stream(
     api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
@@ -291,4 +394,36 @@ def demo_events(
                 jsonlib.dump({"event": event, "data": payload}, output)
                 output.write("\n")
                 output.flush()
+
+
+dom_cli = typer.Typer(help="DOM snapshot utilities.")
+cli.add_typer(dom_cli, name="dom")
+
+
+@dom_cli.command("links")
+def dom_links(
+    snapshot: Optional[Path] = typer.Argument(None, exists=True, dir_okay=False, help="Path to DOM snapshot HTML file."),
+    job_id: Optional[str] = typer.Option(None, "--job-id", help="Lookup DOM snapshot for an existing job."),
+    json_output: bool = typer.Option(False, "--json", help="Print raw JSON list instead of a table."),
+) -> None:
+    """Extract links from a DOM snapshot using the ogf helper."""
+
+    from app.dom_links import extract_links_from_dom, serialize_links
+    from app.store import Store
+
+    path = snapshot
+    if job_id:
+        store = Store()
+        path = store.dom_snapshot_path(job_id=job_id)
+    if not path:
+        raise typer.BadParameter("Provide either a snapshot path or --job-id")
+    if not path.exists():
+        raise typer.BadParameter(f"DOM snapshot not found: {path}")
+
+    records = extract_links_from_dom(path)
+    data = serialize_links(records)
+    if json_output:
+        console.print_json(data=data)
+        return
+    _print_links(data)
  

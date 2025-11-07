@@ -80,6 +80,8 @@ class CaptureManifest:
     blocklist_version: str
     blocklist_hits: dict[str, int]
     warnings: list[CaptureWarningEntry]
+    overlap_match_ratio: float | None
+    validation_failures: list[str]
 
 
 @dataclass(slots=True)
@@ -148,6 +150,8 @@ async def capture_tiles(config: CaptureConfig) -> CaptureResult:
         blocklist_version=blocklist_cfg.version,
         blocklist_hits=blocklist_hits,
         warnings=warnings,
+        overlap_match_ratio=sweep_stats.overlap_match_ratio,
+        validation_failures=[],
     )
 
     return CaptureResult(tiles=tiles, manifest=manifest_payload)

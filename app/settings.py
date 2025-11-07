@@ -108,6 +108,7 @@ class Settings:
     storage: StorageSettings
     warnings: WarningSettings
     logging: LoggingSettings
+    webhook_secret: str
 
     def manifest_environment(self, *, playwright_version: str | None = None) -> ManifestEnvironment:
         """Return the manifest metadata block used across captures."""
@@ -289,6 +290,7 @@ def get_settings(env_path: str = ".env") -> Settings:
     logging_settings = LoggingSettings(
         warning_log_path=Path(cfg("WARNING_LOG_PATH", default="ops/warnings.jsonl")),
     )
+    webhook_secret = cfg("WEBHOOK_SECRET", default="mdwb-dev-webhook")
 
     return Settings(
         env_path=env_path,
@@ -298,6 +300,7 @@ def get_settings(env_path: str = ".env") -> Settings:
         storage=storage,
         warnings=warning_settings,
         logging=logging_settings,
+        webhook_secret=webhook_secret,
     )
 
 

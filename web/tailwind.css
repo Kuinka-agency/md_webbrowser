@@ -101,6 +101,20 @@ body {
   align-self: flex-start;
 }
 
+.run-status {
+  margin: 0.75rem 0 1rem;
+  font-size: 0.95rem;
+  color: #1d4ed8;
+}
+
+.run-status[data-variant="error"] {
+  color: #dc2626;
+}
+
+.run-status[data-variant="success"] {
+  color: #15803d;
+}
+
 .embeddings-form {
   display: flex;
   flex-direction: column;

@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from enum import Enum
 from importlib import metadata
-from typing import Any, Awaitable, Callable, Dict, List, TypedDict
+from typing import Awaitable, Callable, Dict, List, TypedDict
 from uuid import uuid4
 
 from app.capture import CaptureConfig, CaptureResult, capture_tiles
@@ -80,8 +80,6 @@ def build_initial_snapshot(
 
 RunnerType = Callable[..., Awaitable[tuple[CaptureResult, list[dict[str, object]]]]]
 
-WebhookSender = Callable[[str, dict[str, Any]], Awaitable[None]]
-
 
 class JobManager:
     """In-memory job registry backed by Store persistence."""
@@ -99,13 +97,16 @@ class JobManager:
         self._tasks: Dict[str, asyncio.Task[None]] = {}
         self._subscribers: Dict[str, List[asyncio.Queue[JobSnapshot]]] = {}
         self._event_logs: Dict[str, List[dict[str, Any]]] = {}
+        self._event_sequences: Dict[str, int] = {}
         self._webhooks: Dict[str, List[dict[str, Any]]] = {}
-        self._webhook_sender = webhook_sender or _noop_webhook_sender
+        self._webhook_sender = webhook_sender or _default_webhook_sender
 
     async def create_job(self, request: JobCreateRequest) -> JobSnapshot:
         job_id = uuid4().hex
         snapshot = build_initial_snapshot(url=request.url, job_id=job_id)
         self._snapshots[job_id] = snapshot.copy()
+        self._event_logs[job_id] = []
+        self._event_sequences[job_id] = 0
         self._broadcast(job_id)
         task = asyncio.create_task(self._run_job(job_id=job_id, url=request.url))
         self._tasks[job_id] = task
@@ -171,12 +172,93 @@ class JobManager:
         snapshot["error"] = message
         self._broadcast(job_id)
 
+    def get_events(self, job_id: str, since: datetime | None = None) -> List[dict[str, Any]]:
+        if job_id not in self._snapshots:
+            raise KeyError(f"Job {job_id} not found")
+        events = self._event_logs.get(job_id, [])
+        if since is None:
+            return [event.copy() for event in events]
+        filtered: List[dict[str, Any]] = []
+        for event in events:
+            timestamp = event.get("timestamp")
+            if not isinstance(timestamp, str):
+                continue
+            try:
+                parsed = datetime.fromisoformat(timestamp)
+            except ValueError:
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            if parsed >= since:
+                filtered.append(event.copy())
+        return filtered
+
+    def register_webhook(self, job_id: str, *, url: str, events: list[str] | None = None) -> None:
+        if job_id not in self._snapshots:
+            raise KeyError(f"Job {job_id} not found")
+        valid_states = {member.value for member in JobState}
+        normalized: list[str] = []
+        for entry in events or [JobState.DONE.value, JobState.FAILED.value]:
+            if entry not in valid_states:
+                msg = f"Unsupported job state '{entry}'"
+                raise ValueError(msg)
+            normalized.append(entry)
+        self._webhooks.setdefault(job_id, []).append({"url": url, "events": normalized})
+
     def _broadcast(self, job_id: str) -> None:
-        payload = self._snapshots.get(job_id)
-        if payload is None:
-            return
+        payload = self._snapshot_payload(job_id)
+        self._record_event(job_id, payload)
         for queue in list(self._subscribers.get(job_id, [])):
             queue.put_nowait(payload.copy())
+        self._maybe_trigger_webhooks(job_id, payload)
+
+    def _snapshot_payload(self, job_id: str) -> JobSnapshot:
+        snapshot = self._snapshots.get(job_id)
+        if snapshot is None:
+            raise KeyError(f"Job {job_id} not found")
+        payload = snapshot.copy()
+        state = payload.get("state")
+        if isinstance(state, JobState):
+            payload["state"] = state.value
+        return payload
+
+    def _record_event(self, job_id: str, payload: JobSnapshot) -> None:
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "sequence": self._event_sequences.get(job_id, 0),
+            "snapshot": payload,
+        }
+        self._event_sequences[job_id] = entry["sequence"] + 1
+        log = self._event_logs.setdefault(job_id, [])
+        log.append(entry)
+        if len(log) > _EVENT_HISTORY_LIMIT:
+            del log[: len(log) - _EVENT_HISTORY_LIMIT]
+
+    def _maybe_trigger_webhooks(self, job_id: str, payload: JobSnapshot) -> None:
+        sender = self._webhook_sender
+        if sender is None:
+            return
+        hooks = self._webhooks.get(job_id)
+        if not hooks:
+            return
+        state = payload.get("state")
+        if not isinstance(state, str):
+            return
+        for hook in hooks:
+            allowed = hook.get("events") or []
+            if state not in allowed:
+                continue
+            asyncio.create_task(
+                sender(
+                    hook["url"],
+                    {
+                        "job_id": job_id,
+                        "state": state,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "snapshot": payload,
+                    },
+                )
+            )
 
 
 async def execute_capture_job(

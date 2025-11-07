@@ -101,6 +101,10 @@ function initSseBridge() {
     const template = root.dataset.streamTemplate || '/jobs/{job_id}/stream';
     const url = template.replace('{job_id}', jobId || 'demo');
     root.dataset.jobId = jobId;
+    const jobField = document.getElementById('job-id');
+    if (jobField) {
+      jobField.value = jobId;
+    }
     source = new EventSource(url);
     setStatus('Connecting…');
     source.addEventListener('open', () => setStatus(`Connected (${jobId})`));
@@ -425,17 +429,75 @@ function initEmbeddingsPanel(streamRoot) {
 
 function initStreamControls(sse) {
   const runButton = document.getElementById('run-job');
+  const urlInput = document.getElementById('job-url');
   const jobInput = document.getElementById('job-id');
+  const profileSelect = document.getElementById('profile');
+  const ocrSelect = document.getElementById('ocr-policy');
   const root = document.querySelector('[data-stream-root]');
+  const statusEl = document.querySelector('[data-run-status]');
   if (!runButton || !jobInput || !root || !sse) {
     return;
   }
 
-  runButton.addEventListener('click', () => {
-    const jobId = jobInput.value.trim() || 'demo';
-    sse.connect(jobId);
-    alert('Capture submission not implemented yet; reattaching stream to ' + jobId);
-  });
+  const setRunStatus = (text, variant = 'info') => {
+    if (!statusEl) return;
+    statusEl.textContent = text;
+    statusEl.dataset.variant = variant;
+  };
+
+  const submitJob = async () => {
+    const urlValue = urlInput?.value.trim();
+    if (!urlValue) {
+      const existingJob = jobInput.value.trim();
+      if (existingJob) {
+        setRunStatus(`Attaching to job ${existingJob}…`);
+        sse.connect(existingJob);
+      } else {
+        setRunStatus('Provide a URL or job id first.', 'error');
+      }
+      return;
+    }
+
+    const payload = { url: urlValue };
+    if (profileSelect?.value && profileSelect.value !== 'default') {
+      payload.profile_id = profileSelect.value;
+    }
+    if (ocrSelect?.value) {
+      payload.ocr_policy = ocrSelect.value;
+    }
+
+    runButton.disabled = true;
+    setRunStatus('Submitting capture job…');
+    try {
+      const response = await fetch('/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `HTTP ${response.status}`);
+      }
+      const job = await response.json();
+      if (job?.id) {
+        jobInput.value = job.id;
+        if (root) {
+          root.dataset.jobId = job.id;
+        }
+        setRunStatus(`Job ${job.id} submitted. Connecting to stream…`, 'success');
+        sse.connect(job.id);
+      } else {
+        setRunStatus('Submission succeeded but response missing job id.', 'error');
+      }
+    } catch (error) {
+      console.error('Job submission failed', error);
+      setRunStatus(error.message || 'Failed to submit job', 'error');
+    } finally {
+      runButton.disabled = false;
+    }
+  };
+
+  runButton.addEventListener('click', submitJob);
 
   const refreshButton = document.querySelector('[data-links-refresh]'); 
   if (refreshButton) {
@@ -445,7 +507,7 @@ function initStreamControls(sse) {
       const url = template.replace('{job_id}', jobId);
       try {
         const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         renderLinks(root.querySelector('[data-sse-field=\"links\"]'), JSON.stringify(data));
       } catch (error) {

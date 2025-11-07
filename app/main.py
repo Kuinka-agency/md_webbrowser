@@ -4,21 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
 from app.dom_links import blend_dom_with_ocr, demo_dom_links, demo_ocr_links, serialize_links
-from app.jobs import JobManager, JobSnapshot, JobState
+from app.jobs import JobManager, JobSnapshot, JobState, build_signed_webhook_sender
 from app.schemas import (
     EmbeddingSearchRequest,
     EmbeddingSearchResponse,
     JobCreateRequest,
     JobSnapshotResponse,
     SectionEmbeddingMatch,
+    WebhookRegistrationRequest,
 )
+from app.settings import settings
 from app.store import build_store
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,7 +30,7 @@ WEB_ROOT = BASE_DIR / "web"
 
 app = FastAPI(title="Markdown Web Browser")
 app.mount("/static", StaticFiles(directory=WEB_ROOT), name="static")
-JOB_MANAGER = JobManager()
+JOB_MANAGER = JobManager(webhook_sender=build_signed_webhook_sender(settings.webhook_secret))
 store = build_store()
 
 
@@ -97,14 +101,6 @@ def _snapshot_to_response(snapshot: JobSnapshot) -> JobSnapshotResponse:
     )
 
 
-def _snapshot_events(snapshot: JobSnapshot) -> list[tuple[str, str]]:
-    response = _snapshot_to_response(snapshot)
-    events = [("snapshot", json.dumps(response.model_dump()))]
-    if response.error:
-        events.append(("log", json.dumps({"level": "error", "message": response.error})))
-    return events
-
-
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
     """Serve the current web UI shell."""
@@ -171,33 +167,15 @@ async def job_stream(job_id: str, request: Request) -> StreamingResponse:
 
 
 @app.get("/jobs/{job_id}/events")
-async def job_events(job_id: str, request: Request) -> StreamingResponse:
+async def job_events(job_id: str, since: str | None = None) -> StreamingResponse:
     try:
-        queue = JOB_MANAGER.subscribe(job_id)
+        events = JOB_MANAGER.get_events(job_id, since=_parse_since(since))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc
 
     async def event_generator() -> AsyncIterator[str]:
-        heartbeat = 0
-        try:
-            while True:
-                try:
-                    snapshot = await asyncio.wait_for(queue.get(), timeout=5)
-                except asyncio.TimeoutError:
-                    heartbeat += 1
-                    heartbeat_event = {"event": "heartbeat", "data": {"count": heartbeat}}
-                    yield json.dumps(heartbeat_event) + "\n"
-                    if await request.is_disconnected():
-                        break
-                    continue
-
-                for event_name, payload in _snapshot_events(snapshot):
-                    record = {"event": event_name, "data": json.loads(payload)}
-                    yield json.dumps(record) + "\n"
-                if await request.is_disconnected():
-                    break
-        finally:
-            JOB_MANAGER.unsubscribe(job_id, queue)
+        for event in events:
+            yield json.dumps(event) + "\n"
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
@@ -280,6 +258,17 @@ async def embeddings_search(job_id: str, payload: EmbeddingSearchRequest) -> Emb
     )
 
 
+@app.post("/jobs/{job_id}/webhooks", status_code=status.HTTP_202_ACCEPTED)
+async def register_webhook(job_id: str, payload: WebhookRegistrationRequest) -> dict[str, Any]:
+    try:
+        JOB_MANAGER.register_webhook(job_id, url=payload.url, events=payload.events)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"job_id": job_id, "registered": True}
+
+
 def _snapshot_events(snapshot: JobSnapshot) -> list[tuple[str, str]]:
     events: list[tuple[str, str]] = []
     state = snapshot.get("state")
@@ -307,3 +296,15 @@ def _snapshot_events(snapshot: JobSnapshot) -> list[tuple[str, str]]:
     if artifacts:
         events.append(("artifacts", json.dumps(artifacts)))
     return events
+
+
+def _parse_since(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid since timestamp") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed

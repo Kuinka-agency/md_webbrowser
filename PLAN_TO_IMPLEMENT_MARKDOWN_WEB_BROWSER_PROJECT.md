@@ -135,7 +135,7 @@ Key signals:
 - `POST /replay` → re-run with same manifest but different OCR/tiling policy
 
 _2025-11-08 — FuchsiaPond (bd: markdown_web_browser-t82) implemented real `POST /jobs` + `GET /jobs/{id}` routes via the new JobManager, so capture requests now persist manifests/tiles in `Store` and expose snapshots for the UI. SSE + events remain on the roadmap._
-_2025-11-08 — JobManager now drives `/jobs/{id}/stream`, so the HTMX SSE endpoint emits live snapshot JSON (state, progress, manifest path) instead of the demo feed; `/jobs/{id}/events` now serves newline-delimited snapshots for CLI/agent consumption._
+_2025-11-08 — JobManager now drives `/jobs/{id}/stream`, so the HTMX SSE endpoint emits live snapshot JSON (state, progress, manifest path) instead of the demo feed; `/jobs/{id}/events` now serves newline-delimited snapshots for CLI/agent consumption. The UI “Run Capture” button posts to `/jobs` and auto-attaches the stream, and `scripts/mdwb_cli.py` exposes real `stream`/`events` commands for job monitoring._
 
 ### 4.2 Job States
 1. `BROWSER_STARTING`
@@ -168,7 +168,7 @@ Each state carries timestamps, counters (tiles done/total), errors, CfT version,
 - **Microcopy & cues:** Each card shows whether content came from OCR vs DOM patching (badge: “DOM assist”), tile cards include provenance hover showing `tile_i`, `offset`, `sha256`, and CfT version; manifest tab highlights mismatches (e.g., CfT drift) in amber to prompt re-run.
 - **Link actions:** Table rows have inline buttons for “Open in new job”, “Copy anchor Markdown”, and “Mark as crawled”. When the DOM vs OCR delta exceeds a threshold the row gets a warning icon that links to artifact preview anchored to the tile range.
 
-_2025-11-08 — PurpleDog (bd-rje) is scaffolding the HTMX/Alpine UI + SSE wiring while waiting on capture API metadata from `markdown_web_browser-t82`._
+_2025-11-08 — PurpleDog (bd-rje) wired the HTMX/Alpine shell to the live `/jobs` API: the toolbar now POSTs `/jobs`, stores the returned job id, and points the SSE/links panels at `/jobs/{id}` endpoints with demo fallbacks only when a job id isn’t supplied._
 
 _2025-11-08 — SSE bridge now driven by `web/app.js` EventSource client + `/jobs/demo/stream` manifest events so UI can render live state/progress/runtime/log placeholders before the real `/jobs/{id}/stream` exists._
 
@@ -243,7 +243,7 @@ mdwb fetch https://example.com \
   --ocr.server $OLMOCR_URL --ocr.key $OLMOCR_KEY --ocr.model olmOCR-2-7B-1025-FP8
 ```
 
-_2025-11-08 — PurpleDog (bd-dwf) added the initial Typer/Rich CLI scaffold (`scripts/mdwb_cli.py`) with demo `snapshot/links/stream/watch/events/warnings` commands powered by the `/jobs/demo/*` endpoints (including `--json`/`--raw` output + manifest warning/blocklist rendering), `mdwb dom links` for offline DOM snapshot parsing, and the first real `/jobs` commands (`mdwb fetch/show/stream/watch`) wired to the JobManager SSE feed / polling API (fetch supports `--watch`)._
+_2025-11-08 — PurpleDog (bd-dwf) added the initial Typer/Rich CLI scaffold (`scripts/mdwb_cli.py`) with demo `snapshot/links/stream/watch/events/warnings` commands powered by the `/jobs/demo/*` endpoints (including `--json`/`--raw` output + manifest warning/blocklist rendering), `mdwb dom links` for offline DOM snapshot parsing, and the first real `/jobs` commands (`mdwb fetch/show/stream/watch`) wired to the JobManager SSE feed / polling API (fetch supports `--watch`) while `mdwb watch` falls back to polling until `/jobs/{id}/events` lands._
 
 _2025-11-08 — RunPaths now tracks `dom_snapshot_path` and Store exposes `dom_snapshot_path(job_id)` so CLI/tests can discover the captured DOM HTML once t82 writes snapshots._
 
@@ -260,6 +260,7 @@ GET  /jobs/{id}/status
 ```
 
 ### 9.3 Event Stream
+_2025-11-08 — OrangeMountain (bd-3px) wired a persistent event log so `/jobs/{id}/events?since=<iso>` serves NDJSON snapshots and `/jobs/{id}/webhooks` registers signed callbacks (header `X-MDWB-Signature`). `scripts/mdwb_cli.py events` now tails the JSON feed for automation._
 - SSE: `event:state`, `event:tile`, `event:warning`
 - JSONLines: newline-delimited objects mirroring SSE for CLI `--follow`
 
