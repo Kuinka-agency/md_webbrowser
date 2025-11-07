@@ -174,32 +174,53 @@ function initSseBridge() {
 }
 
 function renderManifest(element, payload, { warningListEl, blocklistHitsEl }) {
-  let formatted = payload;
-  try {
-    const parsed = JSON.parse(payload);
-    formatted = JSON.stringify(parsed, null, 2);
-    if (parsed?.warnings) {
-      renderWarnings(warningListEl, parsed.warnings);
+  if (!element) {
+    return;
+  }
+  let formatted = '';
+  let parsedPayload = null;
+  if (typeof payload === 'string') {
+    formatted = payload;
+    try {
+      parsedPayload = JSON.parse(payload);
+      formatted = JSON.stringify(parsedPayload, null, 2);
+    } catch {
+      // keep raw payload
     }
-    if (parsed?.blocklist_hits) {
-      renderBlocklistHits(blocklistHitsEl, parsed.blocklist_hits);
-    }
-  } catch {
-    // fall through
+  } else if (payload) {
+    parsedPayload = payload;
+    formatted = JSON.stringify(payload, null, 2);
+  } else {
+    formatted = 'Manifest not available yet.';
+  }
+  if (parsedPayload?.warnings) {
+    renderWarnings(warningListEl, parsedPayload.warnings);
+  }
+  if (parsedPayload?.blocklist_hits) {
+    renderBlocklistHits(blocklistHitsEl, parsedPayload.blocklist_hits);
   }
   element.textContent = formatted;
 }
 
 function renderLinks(container, raw) {
-  let rows;
-  try {
-    rows = JSON.parse(raw);
-  } catch {
+  if (!container) {
+    return;
+  }
+  let rows = raw;
+  if (typeof raw === 'string') {
+    try {
+      rows = JSON.parse(raw);
+    } catch {
+      rows = null;
+    }
+  }
+
+  if (!Array.isArray(rows)) {
     container.innerHTML = `<p class="placeholder">Invalid links payload</p>`;
     return;
   }
 
-  if (!Array.isArray(rows) || !rows.length) {
+  if (!rows.length) {
     container.innerHTML = `<p class="placeholder">No links yet.</p>`;
     return;
   }
@@ -231,15 +252,24 @@ function renderLinks(container, raw) {
 }
 
 function renderArtifacts(container, raw) {
-  let rows;
-  try {
-    rows = JSON.parse(raw);
-  } catch {
+  if (!container) {
+    return;
+  }
+  let rows = raw;
+  if (typeof raw === 'string') {
+    try {
+      rows = JSON.parse(raw);
+    } catch {
+      rows = null;
+    }
+  }
+
+  if (!Array.isArray(rows)) {
     container.innerHTML = `<li class="placeholder">Invalid artifact payload</li>`;
     return;
   }
 
-  if (!Array.isArray(rows) || !rows.length) {
+  if (!rows.length) {
     container.innerHTML = `<li class="placeholder">No artifacts yet.</li>`;
     return;
   }
