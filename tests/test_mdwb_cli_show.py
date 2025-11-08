@@ -34,6 +34,9 @@ class StubClient:
             raise KeyError(f"unexpected path {path}")
         return response
 
+    def close(self) -> None:  # pragma: no cover - simple stub
+        return None
+
 
 def _fake_settings():
     return mdwb_cli.APISettings(base_url="http://localhost", api_key=None, warning_log_path=Path("ops/warnings.jsonl"))

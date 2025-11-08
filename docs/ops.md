@@ -126,10 +126,10 @@ the workflows converge.
 - Custom metrics include:
   - `mdwb_capture_duration_seconds`, `mdwb_ocr_duration_seconds`, `mdwb_stitch_duration_seconds`
     (histograms for stage timing telemetry, already bucketed for the alert budgets in PLAN §20).
-  - `mdwb_capture_warnings_total{code="…"}` and `mdwb_blocklist_hits_total{selector="…"}` so
-    noisy overlays or duplicate seams trigger dashboards without parsing manifests.
-  - `mdwb_job_completions_total{state="DONE|FAILED"}` to track success rates and
-    `mdwb_sse_heartbeat_total` to alert on stalled `/jobs/{id}/stream` feeds.
+- `mdwb_capture_warnings_total{code="…"}` and `mdwb_blocklist_hits_total{selector="…"}` so
+  noisy overlays or duplicate seams trigger dashboards without parsing manifests.
+- `mdwb_job_completions_total{state="DONE|FAILED"}` to track success rates and
+  `mdwb_sse_heartbeat_total` to alert on stalled `/jobs/{id}/stream` feeds.
 - Quick smoke check (API + exporter):
 
 ```
@@ -140,8 +140,15 @@ curl -s http://localhost:9000/metrics | head -n 5  # dedicated Prom port
 
 The CLI command above reads `.env` for `API_BASE_URL`/`PROMETHEUS_PORT` (override with
 `--api-base`/`--exporter-port` and `--exporter-url` when talking to a remote exporter). Use
-`--json` for structured output or `--no-include-exporter` when only the primary `/metrics`
-endpoint is exposed.
+`--json` for structured output (payload now includes `status`, `generated_at`, `ok_count`,
+`failed_count`, and a per-target list) or `--no-include-exporter` when only the primary `/metrics`
+endpoint is exposed. `scripts/prom_scrape_check.py` simply wraps the same CLI for older
+automation; prefer calling `check_metrics.py` directly.
+- Optional automation toggle: set `MDWB_CHECK_METRICS=1` (and optionally `CHECK_METRICS_TIMEOUT=<seconds>`)
+  before invoking `scripts/run_checks.sh` to append the same Prometheus probe after the lint/type/pytest/Playwright
+  stages. This keeps CI aligned with manual smoke commands without requiring a separate script invocation.
+- If legacy pipelines still call `scripts/prom_scrape_check.py`, they automatically inherit the latest CLI flags
+  (including `--json` and exporter overrides). Document the wrapper usage in release notes whenever the CLI contract shifts.
 - For ad-hoc diagnostics, `scripts/prom_scrape_check.py` is a backward-compatible wrapper around the same Typer CLI, so legacy automation can still invoke the check without code changes.
 - CI/automation can set `MDWB_CHECK_METRICS=1` (plus `CHECK_METRICS_TIMEOUT` if needed) before
 running `scripts/run_checks.sh` to run the same health check after the pytest/Playwright stack.

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -35,6 +36,19 @@ def _probe(metrics_url: str, timeout: float) -> None:
     with httpx.Client(timeout=timeout) as client:
         response = client.get(metrics_url)
         response.raise_for_status()
+
+
+def _build_summary(results: list[dict[str, object]]) -> dict[str, object]:
+    ok_count = sum(1 for row in results if row.get("ok"))
+    fail_count = len(results) - ok_count
+    status = "ok" if fail_count == 0 else "error"
+    return {
+        "status": status,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "ok_count": ok_count,
+        "failed_count": fail_count,
+        "targets": results,
+    }
 
 
 @cli.command()
@@ -97,12 +111,10 @@ def run_check(
 
     if errors:
         if json_output:
-            payload = {"status": "error", "targets": results}
-            typer.echo(json.dumps(payload, indent=2))
+            typer.echo(json.dumps(_build_summary(results), indent=2))
         raise typer.Exit(code=1)
     if json_output:
-        payload = {"status": "ok", "targets": results}
-        typer.echo(json.dumps(payload, indent=2))
+        typer.echo(json.dumps(_build_summary(results), indent=2))
 
 
 def main() -> None:

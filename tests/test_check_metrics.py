@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from typer.testing import CliRunner
 
 from scripts import check_metrics
@@ -40,8 +42,12 @@ def test_run_check_json_output(monkeypatch):
     result = runner.invoke(check_metrics.cli, ["--json", "--no-include-exporter"])
 
     assert result.exit_code == 0
-    assert '"status": "ok"' in result.output
-    assert '"url": "http://api/metrics"' in result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert payload["ok_count"] == 1
+    assert payload["failed_count"] == 0
+    assert "generated_at" in payload
+    assert payload["targets"] == [{"url": "http://api/metrics", "ok": True}]
 
 
 def test_exporter_url_override(monkeypatch):
@@ -76,3 +82,19 @@ def test_run_check_reports_failures(monkeypatch):
 
     assert result.exit_code == 1
     assert "[FAIL] http://api/metrics" in result.output
+
+
+def test_run_check_json_reports_failures(monkeypatch):
+    def fake_probe(url: str, timeout: float) -> None:  # noqa: ANN001
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(check_metrics, "_probe", fake_probe)
+    monkeypatch.setattr(check_metrics, "_load_config", lambda: StubConfig({"API_BASE_URL": "http://api", "PROMETHEUS_PORT": 9000}))
+
+    result = runner.invoke(check_metrics.cli, ["--json", "--no-include-exporter"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "error"
+    assert payload["failed_count"] == 1
+    assert payload["targets"][0]["ok"] is False

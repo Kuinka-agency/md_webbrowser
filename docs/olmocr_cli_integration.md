@@ -14,7 +14,7 @@ Last updated: 2025-11-08 (FuchsiaMountain)
 ## 2. Integration Plan
 1. **Documentation** (bd-rn4) — keep `docs/olmocr_cli_tool_documentation.md` as the authoritative deep-dive and surface it from `docs/olmocr_cli.md`. Extend PLAN §9.3 once the plan file unlocks.
 2. **Environment Bootstrap** — reference `scripts/setup_olmocr_cuda12.sh` in docs/ops.md & PLAN §19.1 so GPU hosts can one-shot install the stack.
-3. **CLI Merge (bd-4dq)** — compare `scripts/contrib/olmocr_cli_upstream.py` with our slim `scripts/olmocr_cli.py`, then either (a) replace the current script, or (b) port targeted features (resume, progress, server reuse). Capture the decision + migration steps in PLAN and bead notes.
+3. **CLI Merge (bd-4dq)** — compare `scripts/contrib/olmocr_cli_upstream.py` with our slim `scripts/olmocr_cli.py`, then either (a) replace the current script, or (b) port targeted features (resume ✅, progress, server reuse). Capture the decision + migration steps in PLAN and bead notes.
 
 ### 2.1 Feature Comparison Snapshot
 
@@ -24,12 +24,12 @@ Last updated: 2025-11-08 (FuchsiaMountain)
 | **Commands** | `show-env`, `run`, `bench`, `demo snapshot/links/stream/events`, DOM utilities. | `run`, `images`, `serve`, `daemon`, rich progress, resume support, server probing, warning filtering. |
 | **Concurrency** | Static `--concurrency` arg. | Auto-selects workers + tensor parallel based on GPU availability, throttles when remote queues are busy. |
 | **Progress UX** | Basic Rich tables for snapshots/events. | Rich logging with ETA, throughput, queue stats, warning suppression. |
-| **Resume** | None (reruns all input). | `--resume/--no-resume` filters already-processed items via `done_flags/`. |
+| **Resume** | `fetch --resume` honors `work_index_list.csv.zst` + `done_flags/` (configurable via `--resume-root/--resume-index/--resume-done-dir`) to skip completed URLs and now auto-enables `--watch` so successful runs write the matching `done_*.flag`. | `--resume/--no-resume` filters already-processed items via `done_flags/`. |
 | **Server lifecycle** | Consumes hosted API only. | Can launch/manage local vLLM server (`serve`, `daemon`) and auto-detect running endpoints. |
 | **Dependencies** | `decouple`, `typer`, `rich`. | Adds `zstandard`, `tomllib`, ThreadPool conversions, PyTorch env awareness. |
 
 ### 2.2 Proposed Merge Direction
-1. **Short term**: keep our CLI for API-facing smoke/ops flows, but port two upstream features quickly: (a) nested `{"ocr": {"policy"}}` payloads (already done via bd-co1), and (b) resumable job filtering for reruns.
+1. **Short term**: keep our CLI for API-facing smoke/ops flows, but port two upstream features quickly: (a) nested `{"ocr": {"policy"}}` payloads (already done via bd-co1), and (b) resumable job filtering for reruns (landed via bd-4dq `fetch --resume`).
 2. **Medium term**: create a unified CLI that exposes both hosted-API helpers and GPU/vLLM workflows. This likely means promoting `scripts/contrib/olmocr_cli_upstream.py` to the main script and moving the lighter API commands under a `mdwb` subcommand group.
 3. **Documentation**: once the merged CLI ships, consolidate CLI docs (Plan §9 + `docs/olmocr_cli.md`) and deprecate the older instructions.
 

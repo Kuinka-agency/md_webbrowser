@@ -70,6 +70,12 @@ guarded hyphenation, table seam rules)
 - `manifest.json` (CfT label+build, DPR, viewport, policies, timings, hashes)
 - `section_embeddings` (sqlite-vec vectors) exposed via `/jobs/{id}/embeddings/search`
 
+## Agent starter helpers
+- `scripts/agents/summarize_article.py` submits (or reuses) a capture job, waits for completion, downloads `result.md`, and emits the first few sentences of plain text. It reuses the shared CLI settings + HTTP clients, so the standard `.env` values keep working.
+- `scripts/agents/generate_todos.py` performs the same capture/poll cycle but looks for checkboxes, bullet lists, and “Next Steps”/“Action Items” headings to emit actionable tasks (text or `--json`).
+
+Both scripts live under `scripts/agents/`, are Typer CLIs, and share helpers (`scripts/agents/shared.py`) that agents can import directly when composing new automations.
+
 ## Persistence & Bundles (Plan §§2, 10, 19.4, 19.6)
 
 - **Content-addressed layout** — now enforced via `RunPaths` in `app/store.py`. Each

@@ -3,22 +3,28 @@
 
 from __future__ import annotations
 
+import csv
+import hashlib
+import io
 import json
 import os
 import subprocess
 import time
 from collections import deque
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Optional, TextIO, Tuple
+from typing import Any, Callable, Iterable, Iterator, Mapping, Optional, TextIO, Tuple
 
 import httpx
 import typer
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from rich.console import Console
 from rich.table import Table
+import zstandard as zstd
+
+_DEFAULT_TIMEOUT = object()
 
 _TyperOptionInfo: Any | None
 _TyperOptionInfo: Any = None
@@ -33,6 +39,8 @@ demo_cli = typer.Typer(help="Demo commands hitting the built-in /jobs/demo endpo
 cli.add_typer(demo_cli, name="demo")
 jobs_cli = typer.Typer(help="Job utilities (events/watch/replay).")
 cli.add_typer(jobs_cli, name="jobs")
+resume_cli = typer.Typer(help="Inspect resume state (done_flags/work_index).")
+cli.add_typer(resume_cli, name="resume")
 jobs_replay_cli = typer.Typer(help="Replay helpers (manifest, future inputs).")
 jobs_cli.add_typer(jobs_replay_cli, name="replay")
 jobs_embeddings_cli = typer.Typer(help="Embeddings utilities (search, future helpers).")
@@ -81,9 +89,17 @@ def _client(
     settings: APISettings,
     http2: bool = True,
     *,
-    timeout: httpx.Timeout | None = None,
+    timeout: httpx.Timeout | float | None | object = _DEFAULT_TIMEOUT,
 ) -> httpx.Client:
-    effective_timeout = timeout or httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
+    if timeout is _DEFAULT_TIMEOUT:
+        effective_timeout: httpx.Timeout | float | None = httpx.Timeout(
+            connect=10.0,
+            read=60.0,
+            write=30.0,
+            pool=10.0,
+        )
+    else:
+        effective_timeout = timeout
     return httpx.Client(
         base_url=settings.base_url,
         timeout=effective_timeout,
@@ -97,13 +113,126 @@ def _client_ctx(
     settings: APISettings,
     *,
     http2: bool = True,
-    timeout: httpx.Timeout | None = None,
+    timeout: httpx.Timeout | float | None | object = _DEFAULT_TIMEOUT,
 ) -> Iterator[httpx.Client]:
     client = _client(settings, http2=http2, timeout=timeout)
     try:
         yield client
     finally:
         client.close()
+
+
+def _resume_hash(identifier: str) -> str:
+    return hashlib.sha256(identifier.encode("utf-8")).hexdigest()[:32]
+
+
+class ResumeManager:
+    """Tracks completed inputs via done_flags + optional work_index CSV."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        index_path: Optional[Path] = None,
+        done_dir: Optional[Path] = None,
+    ) -> None:
+        self.root = root
+        self.index_path = index_path or (root / "work_index_list.csv.zst")
+        self.done_dir = done_dir or (root / "done_flags")
+        self._index_cache: dict[str, set[str]] | None = None
+        self._done_cache: set[str] | None = None
+
+    def status(self) -> tuple[int, Optional[int]]:
+        mapping = self._load_index()
+        done_hashes = self._done_hashes()
+        if mapping is None:
+            return len(done_hashes), None
+        total = sum(len(entries) for entries in mapping.values())
+        done = sum(len(mapping.get(h, ())) for h in done_hashes if h in mapping)
+        return done, total
+
+    def is_complete(self, entry: str) -> bool:
+        group_hash = _resume_hash(entry)
+        if group_hash not in self._done_hashes():
+            return False
+        mapping = self._load_index()
+        if mapping is None:
+            return True
+        entries = mapping.get(group_hash)
+        if not entries:
+            return True
+        return entry in entries
+
+    def mark_complete(self, entry: str) -> None:
+        group_hash = _resume_hash(entry)
+        self.done_dir.mkdir(parents=True, exist_ok=True)
+        flag = self.done_dir / f"done_{group_hash}.flag"
+        if not flag.exists():
+            flag.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+            self._done_cache = None
+        mapping = self._load_index()
+        if mapping is None:
+            mapping = {group_hash: {entry}}
+        else:
+            mapping.setdefault(group_hash, set()).add(entry)
+        self._write_index(mapping)
+
+    def _done_hashes(self) -> set[str]:
+        if self._done_cache is not None:
+            return self._done_cache
+        hashes: set[str] = set()
+        if self.done_dir.exists():
+            for child in self.done_dir.iterdir():
+                if not child.is_file():
+                    continue
+                name = child.name
+                if name.startswith("done_") and name.endswith(".flag"):
+                    hashes.add(name[len("done_") : -len(".flag")])
+        self._done_cache = hashes
+        return hashes
+
+    def _load_index(self) -> dict[str, set[str]] | None:
+        if self._index_cache is not None:
+            return self._index_cache
+        if not self.index_path.exists():
+            return None
+        mapping: dict[str, set[str]] = {}
+        try:
+            dctx = zstd.ZstdDecompressor()
+            with self.index_path.open("rb") as compressed:
+                with dctx.stream_reader(compressed) as reader:
+                    with io.TextIOWrapper(reader, encoding="utf-8", errors="replace") as text_stream:
+                        csv_reader = csv.reader(text_stream)
+                        for row in csv_reader:
+                            if not row:
+                                continue
+                            group_hash, *entries = row
+                            cleaned = {value for value in entries if value}
+                            if cleaned:
+                                mapping[group_hash] = cleaned
+        except Exception as exc:  # pragma: no cover - best effort guard
+            console.print(f"[yellow]Resume index unreadable[/]: {exc}")
+            return None
+        self._index_cache = mapping
+        return mapping
+
+    def _write_index(self, mapping: dict[str, set[str]]) -> None:
+        rows: list[list[str]] = []
+        for group_hash in sorted(mapping.keys()):
+            entries = sorted(mapping[group_hash])
+            rows.append([group_hash, *entries])
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        for row in rows:
+            writer.writerow(row)
+        data = buffer.getvalue().encode("utf-8")
+        cctx = zstd.ZstdCompressor()
+        compressed = cctx.compress(data)
+        self.index_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self.index_path.with_suffix(".tmp")
+        temp_path.write_bytes(compressed)
+        temp_path.replace(self.index_path)
+        self._index_cache = mapping
 
 
 def _print_job(job: dict) -> None:
@@ -329,6 +458,7 @@ def _stream_job(
     *,
     raw: bool,
     hooks: Optional[dict[str, list[str]]] = None,
+    on_terminal: Optional[Callable[[str, dict[str, Any] | None], None]] = None,
 ) -> None:
     with _client_ctx(settings, timeout=None) as client:
         with client.stream("GET", f"/jobs/{job_id}/stream") as response:
@@ -345,6 +475,10 @@ def _stream_job(
                     except json.JSONDecodeError:
                         entry_payload = {"raw": payload}
                     _trigger_event_hooks({"event": event, "payload": entry_payload}, hooks)
+                if on_terminal and event == "state":
+                    state_value = payload.strip().upper()
+                    if state_value in {"DONE", "FAILED"}:
+                        on_terminal(state_value, None)
 
 
 def _iter_event_lines(
@@ -395,6 +529,7 @@ def _watch_job_events_pretty(
     interval: float,
     raw: bool,
     hooks: Optional[dict[str, list[str]]] = None,
+    on_terminal: Optional[Callable[[str, dict[str, Any] | None], None]] = None,
 ) -> None:
     terminal_states = {"DONE", "FAILED"}
     for line in _iter_event_lines(job_id, settings, cursor=cursor, follow=follow, interval=interval):
@@ -412,6 +547,8 @@ def _watch_job_events_pretty(
             _render_snapshot(snapshot)
             state = snapshot.get("state")
             if follow and isinstance(state, str) and state.upper() in terminal_states:
+                if on_terminal:
+                    on_terminal(state.upper(), snapshot)
                 break
         else:
             console.print_json(data=entry)
@@ -426,6 +563,7 @@ def _watch_events_with_fallback(
     interval: float,
     raw: bool,
     hooks: Optional[dict[str, list[str]]] = None,
+    on_terminal: Optional[Callable[[str, dict[str, Any] | None], None]] = None,
 ) -> None:
     """Stream `/jobs/{id}/events`, falling back to SSE when unavailable."""
 
@@ -438,10 +576,11 @@ def _watch_events_with_fallback(
             interval=interval,
             raw=raw,
             hooks=hooks,
+            on_terminal=on_terminal,
         )
     except httpx.HTTPError as exc:
         console.print(f"[yellow]Events feed unavailable ({exc}); falling back to SSE stream.[/]")
-        _stream_job(job_id, settings, raw=raw, hooks=hooks)
+        _stream_job(job_id, settings, raw=raw, hooks=hooks, on_terminal=on_terminal)
 
 
 def _render_snapshot(snapshot: dict[str, Any]) -> None:
@@ -490,6 +629,26 @@ def fetch(
     watch: bool = typer.Option(False, "--watch/--no-watch", help="Stream job progress after submission"),
     raw: bool = typer.Option(False, "--raw", help="When watching, print raw NDJSON lines"),
     http2: bool = typer.Option(True, "--http2/--no-http2"),
+    resume: bool = typer.Option(
+        False,
+        "--resume/--no-resume",
+        help="Skip submission when the URL already appears in done_flags/work_index (auto-enables --watch to record completion).",
+    ),
+    resume_root: Path = typer.Option(
+        Path("."),
+        "--resume-root",
+        help="Directory containing work_index_list.csv.zst and done_flags/ when using --resume.",
+    ),
+    resume_index: Optional[Path] = typer.Option(
+        None,
+        "--resume-index",
+        help="Override the default work_index_list.csv.zst path (defaults to RESUME_ROOT/work_index_list.csv.zst).",
+    ),
+    resume_done_dir: Optional[Path] = typer.Option(
+        None,
+        "--resume-done-dir",
+        help="Override the default done_flags directory (defaults to RESUME_ROOT/done_flags).",
+    ),
     webhook_url: Optional[list[str]] = typer.Option(
         None,
         "--webhook-url",
@@ -518,6 +677,28 @@ def fetch(
             raise typer.BadParameter("--on requires --watch so hooks have events to monitor.", param_hint="--on")
 
     settings = _resolve_settings(api_base)
+
+    resume_manager: ResumeManager | None = None
+    if resume:
+        resolved_root = resume_root.resolve()
+        index_path = resume_index.resolve() if resume_index else (resolved_root / "work_index_list.csv.zst")
+        done_dir = resume_done_dir.resolve() if resume_done_dir else (resolved_root / "done_flags")
+        resume_manager = ResumeManager(resolved_root, index_path=index_path, done_dir=done_dir)
+        done_count, total_entries = resume_manager.status()
+        if total_entries is not None:
+            percent = (done_count / total_entries * 100) if total_entries else 0.0
+            console.print(f"[dim]Resume progress[/]: {done_count}/{total_entries} entries ({percent:.1f}%).")
+        elif done_count:
+            console.print(f"[dim]Resume progress[/]: {done_count} entries marked complete.")
+        if resume_manager.is_complete(url):
+            console.print(
+                f"[green]Resume[/]: {url} already marked complete under {resume_manager.done_dir}; skipping submission."
+            )
+            return
+        if not watch:
+            watch = True
+            console.print("[dim]Resume requires watching job completion; enabling --watch automatically.[/]")
+
     with _client_ctx(settings, http2=http2) as client:
         payload: dict[str, object] = {"url": url}
         if profile:
@@ -540,6 +721,14 @@ def fetch(
                 events=webhook_event,
             )
 
+    resume_marked = False
+
+    def _handle_terminal(state: str, snapshot: dict[str, Any] | None) -> None:
+        nonlocal resume_marked
+        if resume_manager and state.upper() == "DONE" and not resume_marked:
+            resume_manager.mark_complete(url)
+            resume_marked = True
+
     if watch and job_id:
         console.rule(f"Streaming {job_id}")
         _watch_events_with_fallback(
@@ -550,6 +739,7 @@ def fetch(
             interval=2.0,
             raw=raw,
             hooks=hook_map or None,
+            on_terminal=_handle_terminal if resume_manager else None,
         )
 
 

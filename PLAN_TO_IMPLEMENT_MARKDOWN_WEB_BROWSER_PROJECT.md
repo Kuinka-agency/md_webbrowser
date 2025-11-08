@@ -288,6 +288,7 @@ _2025-11-08 — Added pytest coverage (`tests/test_mdwb_cli_events.py`) for the 
 _2025-11-08 — PurpleHill (bd-1gi) finished migrating the remaining event/watch/replay/demo commands onto `_client_ctx` (including the NDJSON cursor helper) so all mdwb CLI HTTP calls close their clients deterministically; ruff/ty/pytest ran clean after the change._
 _2025-11-08 — PinkCat (bd-t46) refreshed README + docs/ops to document the new diag/watch hook/artifact/replay/embeddings commands so ops/onboarding have a single CLI reference._
 _2025-11-08 — PinkCat (bd-mux) added `SKIP_LIBVIPS_CHECK=1` to `scripts/run_checks.sh` so targeted CLI/unit runs can bypass the libvips preflight on hosts without the system dependency while keeping the default fail-fast behavior._
+_2025-11-08 — PinkLake (bd-4dq) added `mdwb fetch --resume`, which reads `work_index_list.csv.zst` + `done_flags/` (configurable via `--resume-root/--resume-index/--resume-done-dir`) before contacting `/jobs`; completed URLs are skipped with a progress summary, README/docs now cover the flags, and `tests/test_mdwb_cli_fetch.py` gained coverage for skip/submit/marking flows. The CLI auto-enables `--watch` for resume runs so successful jobs write the corresponding `done_*.flag` + index entry, keeping future retries deterministic._
 - SSE: `event:state`, `event:tile`, `event:warning`
 - JSONLines: newline-delimited objects mirroring SSE for CLI `--follow`
 
@@ -472,6 +473,7 @@ Document every new env var inside `docs/config.md` so operators know how CfT pin
 _2025-11-08 — PinkCreek (bd-ug0) owning ops/test instrumentation: codifying ruff/ty/Playwright automation + nightly smoke + weekly latency scripts before wiring dashboards and CLI docs._
 _2025-11-08 — PinkCat (bd-tt4) adding pytest coverage for `scripts/check_env.py` (required/optional sets + human/JSON output) so env validation stays stable when config inputs change._
 _2025-11-08 — PinkCat (bd-8pt) added a libvips/pyvips preflight to `scripts/run_checks.sh` so missing system deps surface immediately instead of crashing pytest with `libvips.so` errors._
+_2025-11-08 — RedSnow (bd-ug0.1) aligning the mdwb_cli test stubs with the `_client()` http2/timeout contract so `SKIP_LIBVIPS_CHECK=1 bash scripts/run_checks.sh` can go green again; coordinating with the bd-1gi reservations before landing the fixes + updated status note._
 
 - **Golden pages:** static docs, sticky headers, SPAs with virtualized lists, huge tables, canvas charts.
 - **Assertions:** headings preserved, no duplicate sections at seams, DOM vs OCR link delta < 10%, tables recognized, provenance comments present.
@@ -631,8 +633,10 @@ _2025-11-08 — PinkCreek (bd-ug0) designing ops automation: smoke/latency job r
   - `OCRThrottleSpike`: `ocr_retry_total{reason="throttle"}` rate > 5/min.
   - `SSEDrop`: SSE heartbeat gap > 12s (monitor via HTMX ping endpoint).
 _2025-11-08 — WhiteCastle (bd-7sx) wired Prometheus instrumentation (`prometheus-fastapi-instrumentator` + background exporter on `PROMETHEUS_PORT`) and custom metrics covering capture/OCR/stitch histograms, warning/blocklist counters, SSE/NDJSON heartbeats, and job completion totals. `/metrics` now exposes the same registry for local smoke checks and CI._
-_2025-11-08 — WhiteCastle (bd-bb4) added `scripts/check_metrics.py` so CI/ops can ping `/metrics` + the standalone exporter with one command; docs/ops now reference the helper alongside the manual curl examples._
+_2025-11-08 — WhiteCastle (bd-bb4) added `scripts/check_metrics.py` so CI/ops can ping `/metrics` + the standalone exporter with one command; docs/ops now reference the helper alongside the manual curl examples (and the CLI emits JSON for dashboards)._
 _2025-11-08 — WhiteCastle (bd-2n8) added an opt-in Prometheus smoke step to `scripts/run_checks.sh` (enable via `MDWB_CHECK_METRICS=1`, override timeout with `CHECK_METRICS_TIMEOUT`) so CI/deploy scripts can ping `/metrics` whenever the API is reachable._
+_2025-11-08 — WhiteCastle (bd-ljl/rqn) extended `scripts/check_metrics.py` with `--exporter-url` + `--json` flags, documented the legacy `scripts/prom_scrape_check.py` wrapper, and updated README/docs/ops to call out the optional run_checks toggle for telemetry smoke._
+_2025-11-08 — PurpleHill (bd-ljl/rqn) enriched the `--json` output from `scripts/check_metrics.py` with `generated_at`, `ok_count`, `failed_count`, and per-target entries so CI dashboards can consume a structured summary directly, and refreshed README/docs/ops to highlight `MDWB_CHECK_METRICS`/`CHECK_METRICS_TIMEOUT` and the legacy `scripts/prom_scrape_check.py` wrapper._
 _2025-11-08 — PinkDog (bd-oqr) added the `mdwb diag <job_id>` CLI command so on-call engineers can pull CfT/Playwright metadata, capture/OCR/stitch timings, warnings, and blocklist hits (with `--json` output) straight from the CLI per the Section 20 playbook._
 
 ### 20.3 Release & Regression Process
@@ -796,5 +800,6 @@ Only when all four items are true should you deploy capture/OCR changes.
 - **Example gallery:** Maintain `docs/gallery/` with side-by-side “screenshot vs Markdown” for 6–8 representative sites (article, dashboard, consent-heavy flow). Update it whenever you tweak capture/stitching so newcomers instantly see the output quality.
 - **Hosted sandbox:** Stand up a rate-limited demo (could be the existing FastAPI UI with auth/rate limits) where users can submit a URL and receive Markdown + artifacts. Even if it queues requests, the hands-on experience drives adoption and social sharing.
 - **Agent starter scripts:** Include a `scripts/agents/` folder (or docs section) with ready-to-run examples—e.g., “Summarize a news article via CLI + hosted LLM,” “Generate TODOs from a dashboard”—so agent builders can integrate quickly.
+_2025-11-08 — RedSnow (bd-oez) added `scripts/agents/` with `summarize_article` + `generate_todos` Typer helpers (plus shared polling utilities), lightweight tests, README/docs sections, and wired the new test into `scripts/run_checks.sh` so PLAN §23 is unblocked._
 - **Markdown dataset drop:** Periodically publish a small “Markdown Web Browser Corpus” (e.g., 25 popular sites converted) with manifests and links JSON under a permissive license. This gives researchers and agent hackers immediate fodder and shows confidence in the pipeline.
 - **Messaging checklist:** When announcing releases, lead with simple proof points (“Any webpage → auditable Markdown with tiling + provenance in <30 s”). Link to the gallery/demo/dataset so people can try it without cloning.

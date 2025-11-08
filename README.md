@@ -38,7 +38,7 @@ See `PLAN_TO_IMPLEMENT_MARKDOWN_WEB_BROWSER_PROJECT.md` §§2–5, 19 for the fu
 
 ## CLI cheatsheet (`scripts/mdwb_cli.py`)
 - `fetch <url> [--watch]` — enqueue + optionally stream Markdown as tiles finish.
-- `fetch <url> --resume` — skip URLs whose done flags already exist under `done_flags/` (uses `work_index_list.csv.zst`).
+- `fetch <url> --resume [--resume-root path]` — skip URLs already recorded in `done_flags/` (optionally `work_index_list.csv.zst`) under the chosen root; the CLI auto-enables `--watch` so completed jobs write their flag/index entries. Override locations via `--resume-index/--resume-done-dir`.
 - `fetch <url> --webhook-url https://... [--webhook-event DONE --webhook-event FAILED]` — register callbacks right after the job is created.
 - `show <job-id> [--ocr-metrics]` — dump the latest job snapshot, optionally with OCR batch/quota telemetry.
 - `stream <job-id>` — follow the SSE feed.
@@ -53,6 +53,12 @@ See `PLAN_TO_IMPLEMENT_MARKDOWN_WEB_BROWSER_PROJECT.md` §§2–5, 19 for the fu
 - `demo snapshot|stream|events` — exercise the demo endpoints without hitting a live pipeline.
 
 The CLI reads `API_BASE_URL` + `MDWB_API_KEY` from `.env`; override with `--api-base` when targeting staging. For CUDA/vLLM workflows, see `docs/olmocr_cli_tool_documentation.md` and `docs/olmocr_cli_integration.md` for detailed setup + merge notes.
+
+## Agent starter scripts (`scripts/agents/`)
+- `uv run python -m scripts.agents.summarize_article summarize --url https://example.com` — submit (or reuse via `--job-id`) and print a short summary of the captured Markdown.
+- `uv run python -m scripts.agents.generate_todos todos --job-id <id> [--json]` — extract TODO-style bullets from a finished job; accepts `--url` to run a fresh capture.
+
+Both helpers reuse the CLI’s auth + HTTP plumbing, accept the same `--api-base/--http2` flags, and fall back to existing jobs when you only need post-processing.
 
 ## Prerequisites & environment
 - **Chrome for Testing pin:** Set `CFT_VERSION` + `CFT_LABEL` in `.env` so manifests and ops dashboards stay consistent. Re-run `playwright install` whenever the label/build changes.
@@ -73,7 +79,9 @@ uv run playwright test tests/smoke_capture.spec.ts
 `./scripts/run_checks.sh` wraps the same sequence for CI. Set `PLAYWRIGHT_BIN=/path/to/playwright-test`
 if you need to invoke the Node-based runner; otherwise the script attempts `uv run playwright test …` and
 prints a warning when the bundled Python CLI lacks the `test` command. When you already know libvips isn’t
-available in a minimal container, export `SKIP_LIBVIPS_CHECK=1` to bypass the preflight warning.
+available in a minimal container, export `SKIP_LIBVIPS_CHECK=1` to bypass the preflight warning. Set
+`MDWB_CHECK_METRICS=1` (optionally `CHECK_METRICS_TIMEOUT=<seconds>`) to append the Prometheus health check
+(`scripts/check_metrics.py --timeout … --json`) after the pytest/Playwright stack.
 
 Also run `uv run python scripts/check_env.py` whenever `.env` changes—CI and nightly smokes depend on it to confirm CfT pins + OCR secrets.
 
@@ -96,6 +104,7 @@ Additional expectations (per PLAN §§14, 19.10, 22):
 - `mdwb jobs replay manifest <manifest.json>` — re-run a job with a stored manifest via `POST /replay` (accepts `--api-base`, `--http2`, `--json`); keep `scripts/replay_job.sh` around for legacy automation until everything points at the CLI.
 - `mdwb jobs show <job-id>` — inspect the latest snapshot plus sweep stats/validation issues in one table (look for the new “sweep”/“validation” rows when diagnosing seam problems).
 - `scripts/update_smoke_pointers.py <run-dir> --root benchmarks/production` — refresh `latest_summary.md`, `latest_manifest_index.json`, and `latest_metrics.json` after ad-hoc smoke runs so dashboards point at the right data (add `--weekly-source` when overriding the rolling summary).
+- `scripts/check_metrics.py` — ping `/metrics` plus the exporter; supports `--api-base`, `--exporter-url`, and `--json` for structured output (`status`, `generated_at`, per-target success/failure counts). `scripts/prom_scrape_check.py` remains as a compatibility wrapper but simply re-exports the same Typer CLI.
 - Prometheus metrics now cover capture/OCR/stitch durations, warning/blocklist counts, job completions, and SSE heartbeats via `prometheus-fastapi-instrumentator`. Scrape `/metrics` on the API port or hit the background exporter on `PROMETHEUS_PORT` (default 9000); docs/ops.md lists the metric names + alert hooks.
 - Set `MDWB_CHECK_METRICS=1` (optionally `CHECK_METRICS_TIMEOUT=<seconds>`) when running `scripts/run_checks.sh` to include the Prometheus smoke (`scripts/check_metrics.py`) alongside the usual lint/type/pytest/Playwright stack.
 

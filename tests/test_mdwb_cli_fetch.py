@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 from typer.testing import CliRunner
+import zstandard as zstd
 
 from scripts import mdwb_cli
 
@@ -29,6 +31,16 @@ def _fake_settings():
         api_key=None,
         warning_log_path=Path("ops/warnings.jsonl"),
     )
+
+
+def _write_resume_state(root: Path, group_hash: str, entries: list[str]) -> None:
+    index_path = root / "work_index_list.csv.zst"
+    done_dir = root / "done_flags"
+    done_dir.mkdir(parents=True, exist_ok=True)
+    (done_dir / f"done_{group_hash}.flag").write_text("", encoding="utf-8")
+    csv_line = ",".join([group_hash, *entries]) + "\n"
+    compressed = zstd.ZstdCompressor().compress(csv_line.encode("utf-8"))
+    index_path.write_bytes(compressed)
 
 
 def test_fetch_with_webhook_urls(monkeypatch):
@@ -103,3 +115,114 @@ def test_fetch_handles_webhook_failure(monkeypatch):
     assert result.exit_code == 0
     assert "Failed to register webhook" in result.output
     assert calls[-1][1] == {"url": "https://foo/hook", "events": ["DONE", "FAILED"]}
+
+
+def test_fetch_resume_skips_completed_url(monkeypatch, tmp_path):
+    _write_resume_state(tmp_path, mdwb_cli._resume_hash("https://example.com"), ["https://example.com"])
+    monkeypatch.setattr(mdwb_cli, "_resolve_settings", lambda base: _fake_settings())
+
+    @contextmanager
+    def _fail_client(*_args, **_kwargs):
+        raise AssertionError("client should not run when resume skips")
+        yield
+
+    monkeypatch.setattr(mdwb_cli, "_client_ctx", _fail_client)
+
+    result = runner.invoke(
+        mdwb_cli.cli,
+        [
+            "fetch",
+            "https://example.com",
+            "--resume",
+            "--resume-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "already marked complete" in result.output
+
+
+def test_fetch_resume_submits_new_url(monkeypatch, tmp_path):
+    _write_resume_state(tmp_path, mdwb_cli._resume_hash("https://done.example"), ["https://done.example"])
+    monkeypatch.setattr(mdwb_cli, "_resolve_settings", lambda base: _fake_settings())
+
+    calls: list[tuple[str, dict]] = []
+
+    class FakeClient:
+        def post(self, url: str, json=None):  # noqa: ANN001
+            payload = json or {}
+            calls.append((url, payload))
+            if url == "/jobs":
+                return DummyResponse(200, {"id": "job-789"})
+            return DummyResponse(202)
+
+        def close(self) -> None:  # pragma: no cover - simple stub
+            return None
+
+    @contextmanager
+    def _client_ctx(*_args, **_kwargs):
+        yield FakeClient()
+
+    monkeypatch.setattr(mdwb_cli, "_client_ctx", _client_ctx)
+    def _fake_watch(*_args, **kwargs):
+        cb = kwargs.get("on_terminal")
+        if cb:
+            cb("DONE", {"state": "DONE"})
+
+    monkeypatch.setattr(mdwb_cli, "_watch_events_with_fallback", _fake_watch)
+
+    result = runner.invoke(
+        mdwb_cli.cli,
+        [
+            "fetch",
+            "https://new.example",
+            "--resume",
+            "--resume-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls and calls[0][0] == "/jobs"
+
+
+def test_fetch_resume_marks_completion(monkeypatch, tmp_path):
+    monkeypatch.setattr(mdwb_cli, "_resolve_settings", lambda base: _fake_settings())
+
+    class FakeClient:
+        def post(self, url: str, json=None):  # noqa: ANN001
+            if url == "/jobs":
+                return DummyResponse(200, {"id": "job-999"})
+            return DummyResponse(202)
+
+        def close(self) -> None:  # pragma: no cover - simple stub
+            return None
+
+    @contextmanager
+    def _client_ctx(*_args, **_kwargs):
+        yield FakeClient()
+
+    def _fake_watch(*_args, **kwargs):
+        cb = kwargs.get("on_terminal")
+        if cb:
+            cb("DONE", {"state": "DONE"})
+
+    monkeypatch.setattr(mdwb_cli, "_client_ctx", _client_ctx)
+    monkeypatch.setattr(mdwb_cli, "_watch_events_with_fallback", _fake_watch)
+
+    result = runner.invoke(
+        mdwb_cli.cli,
+        [
+            "fetch",
+            "https://resume.example",
+            "--resume",
+            "--resume-root",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    group_hash = mdwb_cli._resume_hash("https://resume.example")
+    flag = tmp_path / "done_flags" / f"done_{group_hash}.flag"
+    assert flag.exists()

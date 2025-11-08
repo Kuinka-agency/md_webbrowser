@@ -1,0 +1,3 @@
+- bd-2n8: docs updated for MDWB_CHECK_METRICS toggle.
+- bd-jm4: prom_scrape_check delegates to check_metrics.
+- bd-3pd/ljl: exporter-url + --json flags shipped.
