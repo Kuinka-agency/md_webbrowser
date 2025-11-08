@@ -83,12 +83,15 @@ Key signals:
 - **Transport selection:** Default to CDP for CfT Chromium; fall back to **WebDriver BiDi** whenever CDP parity lags (e.g., cross-browser replay, non-Chromium agents, or CfT regressions). Record the active transport in `manifest.browser_transport` and include it in benchmark/run reports.
 - **Context:** `viewport=1280×2000`, `deviceScaleFactor=2`, `colorScheme="light"`, `locale="en-US"`, reduced motion, screenshot `animations="disabled"`, and init scripts masking `navigator.webdriver`. Prefer Playwright’s built-in screenshot options (masking, CSS scaling) over bespoke CSS.
 - **Version guard:** Require Playwright ≥1.50 so we inherit the built-in animation disabling, `expect(page).toHaveScreenshot()` stability, and locator `hasNot*` filters that keep the viewport sweep deterministic. Capture the exact version in `manifest.playwright_version`.
-- **Screenshot config:** Set global defaults in `playwright.config.(ts|mjs)` for `use: { viewport, deviceScaleFactor: 2, colorScheme: "light", screenshot: { animations: "disabled", caret: "hide", maskColor: "#fff", timeout: 15000 } }`. Prefer locator/page `toHaveScreenshot` assertions with CSS mask lists instead of one-off sleep/scroll hacks.
+- **Screenshot config:** Set global defaults in `playwright.config.(ts|mjs)` (`use.viewport=1280×2000`, `deviceScaleFactor=2`, `colorScheme="light"`, `reducedMotion="reduce"`, screenshot `{ animations:"disabled", caret:"hide", maskColor:"#fff", timeout:15000 }`). The capture runtime mirrors these values via `app/settings.py`, and `scripts/run_checks.sh` + Playwright smoke specs always import the shared config. Prefer locator/page `toHaveScreenshot` assertions with CSS mask lists over bespoke sleep/scroll hacks.
 - **Navigation:** `page.goto(url, wait_until="networkidle")` with a firm timeout and cleanup of long-lived sockets.
 - **Scroll policy:** Deterministic viewport sweep that scrolls ≈1000 px per step, waits 300–350 ms, caps at 200 steps, and stops once scrollHeight stabilizes twice; uses `IntersectionObserver` sentinels plus SPA height-shrink retries (Section 19.2.4).
 - **Stability pass:** Inject selector blocklist CSS via Playwright’s screenshot `style` option to hide cookie banners/sticky headers, pause/mute media, and enforce `prefers-reduced-motion: reduce`.
 - **Playwright screenshot APIs:** Lean on `expect(page).toHaveScreenshot()` / `expect(locator).toHaveScreenshot()` for smoke tests and capture assertions so animation freezing, masking, and CSS scaling stay centralized in upstream Playwright code.
 - **DOM harvest:** Capture `anchors`, `forms`, `headings`, and `meta` data (title, canonical, og:url, lang, timestamps) into `links.json` so the Links Appendix and agents can mirror the live DOM.
+
+_2025-11-08 — RedBear (bd-0o0) opened a bead to land the shared Playwright config + CDP/BiDi transport fallback so §§3.1–3.4 match AGENTS.md defaults._
+_2025-11-08 — RedBear (bd-x6v) is tracking the content-addressed cache reuse/dedup work from §3.5/§19.6 so repeated captures actually hit the cache._
 
 ### 3.2 Tiling & Resizing
 - Prefer viewport-sized sweeps over `full_page=True`; if a monolithic bitmap is needed, slice it into vertical strips (~1400 px) with **≈120 px overlap**.
@@ -115,6 +118,7 @@ Key signals:
 - **Database:** `runs.db` (SQLite/SQLModel/sqlite-vec) stores `runs(id, url, started_at, finished_at, status, cache_path, sha256_full, tiles, ocr_provider, model)` plus `links(run_id, href, text, rel, type)` and section embedding vectors.
 - **Git/LFS (optional):** Commit Markdown outputs, store heavy artifacts via LFS so CI can diff Markdown over time.
 - **Content addressing:** Key caches by `(normalized_url, cft_version, viewport, deviceScaleFactor, model_name, model_rev)` to prevent mismatches when browsers or models change.
+_2025-11-08 — RedBear (bd-x6v) wired in the content-addressed cache reuse flow: `/jobs` computes the key up front (respecting per-request viewport overrides), manifests carry `cache_hit/cache_key`, cache-hit snapshots now include artifact metadata, `mdwb fetch` reuses by default (`--no-cache` overrides), and JobManager emits cache-hit events so SSE/UI/CLI reflect when artifacts were replayed._
 - _2025-11-08 — PinkCreek (bd-ug0) added `scripts/check_env.py` so CI/smoke jobs can fail fast when `.env` is incomplete (API_BASE_URL, CfT pin, olmOCR endpoints, concurrency caps). OrangeMountain (bd-tt4) added pytest coverage for the helper (`tests/test_check_env.py`) covering both human and JSON output._
 
 ---
@@ -137,6 +141,7 @@ Key signals:
 
 _2025-11-08 — FuchsiaPond (bd: markdown_web_browser-t82) implemented real `POST /jobs` + `GET /jobs/{id}` routes via the new JobManager, so capture requests now persist manifests/tiles in `Store` and expose snapshots for the UI. SSE + events remain on the roadmap._
 _2025-11-08 — JobManager now drives `/jobs/{id}/stream`, so the HTMX SSE endpoint emits live snapshot JSON (state, progress, manifest path) instead of the demo feed; `/jobs/{id}/events` now serves newline-delimited snapshots for CLI/agent consumption. The UI Events tab tails the same feed, and `scripts/mdwb_cli.py` exposes real `stream`/`events` commands for job monitoring._
+_2025-11-08 — RedBear (bd-9ke) implemented the real `/replay` endpoint + event logging so CLI/ops tooling can resubmit manifests per §§4.1/9.1._
 
 ### 4.2 Job States
 1. `BROWSER_STARTING`
@@ -187,6 +192,8 @@ _2025-11-08 — Added BeautifulSoup-powered DOM snapshot parsing so `extract_lin
 
 _2025-11-08 — FuchsiaMountain (bd-co1) hardened the live monitoring surfaces: the UI Events tab now consumes `/jobs/{id}/events` via a streaming NDJSON reader (heartbeat/health badges + reconnect cues), the Manifest tab surfaces sweep stats + validation alerts pulled from the stream, and the Links/Manifest panels auto-refresh whenever a job transitions into a terminal state._
 
+_2025-11-08 — RedBear (bd-2p3) opened to deliver the missing Links tab actions, per-domain grouping, and DOM-vs-OCR badges promised in §5._
+
 ---
 
 ## 6. Error Handling & Resilience
@@ -222,6 +229,9 @@ _2025-11-08 — LilacSnow (bd-dm9) synced the public `ManifestMetadata` schema/d
 - TLS baseline: terminate HTTPS at the FastAPI/ASGI edge with automatic certificate rotation; include CfT version, commit SHA, and job UUID in structured logs for forensic stitching.
 - Data retention policy: artifacts default to 30-day retention with per-workspace override; manifest records `purge_at` so downstream agents know when cache entries expire.
 - Red/blue profile separation: authenticated browsing profiles live under user-specific directories with OS-level sandboxing; jobs referencing profiles inherit that isolation and record it in `manifest.profile_id`.
+
+_2025-11-08 — RedBear (bd-cls) opened a bead to wire `profile_id` through the API/capture stack and add the retention metadata promised above._
+_2025-11-08 — RedBear (bd-cls) wired profile_id through JobManager/capture/store, persisting storage state under `.cache/profiles/<id>` and recording the id in manifests + RunRecord._
 
 ---
 
@@ -296,7 +306,8 @@ _2025-11-08 — RedSnow (bd-742) extended `mdwb resume status` with `--pending/-
 _2025-11-08 — RedSnow (bd-dex) added `--out` support to the new agent starter scripts (summaries + TODOs) so automations can persist results; README/docs stayed in sync and pytest now covers the new flag._
 _2025-11-08 — RedSnow (bd-3aa) added the `MDWB_RUN_E2E=1` toggle to `scripts/run_checks.sh` so teams can optionally run `tests/test_e2e_cli.py` after the standard pytest subset; README/docs/ops now document the flag alongside `MDWB_CHECK_METRICS`._
 _2025-11-08 — RedSnow (bd-5q6) documented the rich CLI FlowLogger output + `MDWB_RUN_E2E` usage in README/docs/ops so ops/CI know how to capture the panels/logs when the suite runs._
-_2025-11-08 — RedSnow (bd-4zy) expanded ops pytest coverage (update_smoke_pointers env/root behavior, show_latest_smoke failure/JSON paths, check_metrics console timing) and wired the new tests into `scripts/run_checks.sh` so ops tooling regressions surface in CI._
+_2025-11-08 — RedSnow (bd-4zy) expanded ops pytest coverage (update_smoke_pointers env/root behavior, show_latest_smoke failure/JSON paths, check_metrics console timing) and wired the new tests into `scripts/run_checks.sh` so ops tooling regressions surface in CI. WhiteDog followed up with additional show_latest_smoke JSON-pointer tests + check_metrics summary assertions and synced README/docs accordingly._
+_2025-11-08 — WhiteDog (bd-4zy follow-up) added missing pointer/weekly JSON tests for `scripts/show_latest_smoke.py`, ensured `README.md`/`docs/ops.md` describe the new `--json` outputs and pytest summary artifacts emitted by `scripts/run_checks.sh`, and added JSON-summary coverage to `tests/test_check_metrics.py` so `total_duration_ms` matches per-target timings._
 _2025-11-08 — PinkLake (bd-4dq) added optional session reuse to the mdwb CLI (`--reuse-session`) and wired the agent starter scripts to reuse a single HTTP client by default so submit/poll/fetch no longer renegotiate TLS/H2 for every phase._
 - SSE: `event:state`, `event:tile`, `event:warning`
 - JSONLines: newline-delimited objects mirroring SSE for CLI `--follow`
@@ -494,6 +505,8 @@ _2025-11-08 — WhiteDog (bd-ptest-reporting) taught `scripts/run_checks.sh` to 
 - **Generative E2E guardrail:** every major feature must have at least one GenIA-E2ETest (or comparable LLM-generated) scenario that exercises scrolling, tiling, OCR, stitching, and manifest logging end-to-end. Keep fixtures for these tests under `tests/test_e2e_generated.py` and fail CI when the Markdown diff exceeds 2%.
 - **Rich-logged integration suites:** add `tests/test_e2e_cli.py` scenarios that exercise CLI + agent workflows with `rich` panels/tables/syntax highlighting so each step logs inputs, invoked helpers, and outputs. These tests should: (a) print the URL/resume root/webhook targets via `rich.Panel`, (b) describe the feature under test (“mdwb fetch --resume”, “scripts/agents/summarize_article”, etc.) with the internal functions being exercised, (c) capture outputs/results (manifest paths, warning stats, webhook payloads) in tables, and (d) emit a final summary panel with timings, exit codes, and artifact directories. Hook these suites into `scripts/run_checks.sh` (behind `MDWB_CHECK_METRICS` or a similar env toggle) so ops can chase regressions with the same annotated breadcrumbs they’d expect in production.
 
+_2025-11-08 — RedBear (bd-hki) opened a bead for the missing GenIA guardrail suite (`tests/test_e2e_generated.py`) + run_checks toggle mentioned above._
+
 ### 14.1 Pytest Coverage Checklist
 
 All new or modified subsystems must be accompanied by targeted pytest modules so regressions surface quickly. When in doubt, follow this baseline matrix:
@@ -504,7 +517,7 @@ All new or modified subsystems must be accompanied by targeted pytest modules so
 | Store & manifests | `tests/test_store_manifest.py`, `tests/test_manifest_contract.py` | Ensure RunRecord metadata (timings, sweep stats, validation counts) persists and matches schema contracts. |
 | CLI commands | `tests/test_mdwb_cli_*.py` | Use `CliRunner` + stub clients to cover every Typer command (artifacts, replay, resume, warnings, resume status, ocr metrics). Include JSON output assertions when supported. |
 | Agent helpers | `tests/test_agent_scripts.py` | Exercise the shared capture/resume utilities powering `scripts/agents/…`. |
-| Prometheus tooling | `tests/test_check_metrics.py` | Verify structured JSON output and exporter overrides for the metrics health check. |
+| Prometheus tooling | `tests/test_check_metrics.py` | Verify structured JSON output (status/ok/fail counts/total_duration_ms) and exporter overrides for the metrics health check. |
 | Ops scripts | `tests/test_show_latest_smoke.py`, `tests/test_update_smoke_pointers.py` | Ensure smoke manifests/summaries render overlap/validation breadcrumbs and pointer files are validated. |
 
 When adding code to these areas:
@@ -602,6 +615,7 @@ Below is a focused, pragmatic list of near-term upgrades. They map to the sectio
 
 > **Progress — 2025-11-08 (BlackPond):** Persistence layer + embeddings search endpoints are live. `app/store.py`, `app/embeddings.py`, and `app/main.py` now expose sqlite-vec backed upsert/search helpers plus `/jobs/{id}/embeddings/search`, with docs/config updated to match.
 > _Status 2025-11-08 — FuchsiaPond (bd: markdown_web_browser-t82) integrated the capture pipeline with `Store`, so manifests + tiles are written to cache directories and RunRecord metadata updates automatically once captures finish._
+- _2025-11-08 — RedBear (bd-x6v) implemented the cache key/index so identical runs reuse artifacts (manifests/CLI now surface `cache_hit`, and `/jobs` accepts `reuse_cache` to override the behavior)._
 - Add sqlite-vec section embeddings keyed by `(run_id, section_id, tile_range)` for instant "jump to section" queries.
 - Content-address caches by `(normalized_url, cft_version, viewport, deviceScaleFactor, model_name, model_rev)`.
 - Offer tar.zst bundle downloads of `artifact/`, `out.md`, `links.json`, `manifest.json` using Zstandard.
@@ -611,10 +625,14 @@ Below is a focused, pragmatic list of near-term upgrades. They map to the sectio
 - Add `/jobs/{id}/events` JSONLines feed for agents/CLI `--follow` workflows.
 - Enhance the Links tab with per-domain grouping, target rel column, and "DOM vs OCR delta" badge.
 
+_2025-11-08 — RedBear (bd-4wx) opened to swap the bespoke EventSource wiring for the HTMX SSE extension so §19.7 becomes reality._
+
 ### 19.8 Performance & Concurrency
 - Offer Granian as an alternative ASGI server, document when to use it, and expose toggles in ops docs.
 - Implement concurrency autotune: start at `min(8, cpu_count)` OCR in-flight requests, adjust based on p95 + 5xx rate, and emit "throttle to N" events in UI.
 - Enable HTTP/2 in httpx, reuse connections, gzip Markdown streams.
+
+_2025-11-08 — RedBear (bd-l9n) is covering the Granian toggle/runbook so §19.8 has a concrete deployment story._
 
 ### 19.9 Robustness & Anti-Flakiness
 - Maintain versioned CSS/selector blocklists (JSON) with per-domain overrides; inject via screenshot style or `page.addStyleTag`.
@@ -691,6 +709,8 @@ _2025-11-08 — PinkDog (bd-oqr) added the `mdwb diag <job_id>` CLI command so o
 - **Canary:** run nightly canaries against 5 representative URLs with both remote FP8 and local toolkit to ensure parity; fail the canary job if Markdown diff > 2% or embeddings drift > 0.1 cosine.
 - **Screenshot stabilization checklist:** before tagging a release, verify (a) `[aria-busy=true]` nodes clear, (b) volatile widgets (clocks, tickers, ads) are masked via Playwright config, (c) animation disabling + caret hiding is enabled, and (d) CSS blocklist entries were reviewed/updated (`docs/blocklist.md`). Document completion in release notes.
 - **CLI verification:** For capture/OCR fixes, run `scripts/olmocr_cli.py run` against at least two URLs in the production smoke set to ensure the hosted API + CLI workflow stay healthy. Log request IDs in the release notes for traceability.
+
+_2025-11-08 — RedBear (bd-e0q) is drafting the release/regression checklist doc so §20.3 has a concrete runbook instead of bullets._
 
 ### 20.4 Incident Response Ladder
 1. **Acknowledge:** SSE/UI banner plus PagerDuty page when capture or OCR SLO alert fires.

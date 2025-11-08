@@ -36,8 +36,19 @@ See `PLAN_TO_IMPLEMENT_MARKDOWN_WEB_BROWSER_PROJECT.md` §§2–5, 19 for the fu
    - UI Run button posts `/jobs`.
    - CLI example: `uv run python scripts/mdwb_cli.py fetch https://example.com --watch`
 
+### Persistent Chromium profiles
+- The UI profile dropdown and CLI `--profile <id>` flag reuse login/storage state under `CACHE_ROOT/profiles/<id>/storage_state.json`. Pick distinct IDs for red/blue teams or authenticated personas.
+- Profiles are recorded in `manifest.profile_id`, surfaced via `/jobs/{id}`/SSE/CLI diagnostics, and stored in `runs.db` so ops can audit which captures used which credentials.
+- Storage directories are slugged automatically (`[A-Za-z0-9._-]`), so feel free to pass human-friendly names (e.g., `agent.alpha`).
+
+### Cache reuse
+- `POST /jobs` now deduplicates captures using a content-address (`url + CfT + viewport + DSF + OCR model + profile`). By default the CLI enables this, so identical requests return immediately with `cache_hit=true` and reuse existing artifacts.
+- Disable reuse with `mdwb fetch --no-cache` (or `reuse_cache=false` in the API payload) when you need a fresh capture even if nothing changed.
+- Manifests, `/jobs/{id}` snapshots, SSE logs, and `mdwb diag` all expose `cache_hit` so downstream tooling can tell whether a job ran or reused cached output.
+
 ## CLI cheatsheet (`scripts/mdwb_cli.py`)
 - `fetch <url> [--watch]` — enqueue + optionally stream Markdown as tiles finish (percent/ETA shown unless `--no-progress`; add `--reuse-session` to keep one HTTP/2 client alive across submit + stream).
+- `fetch <url> --no-cache` — force a fresh capture even if an identical cache entry exists.
 - `fetch <url> --resume [--resume-root path]` — skip URLs already recorded in `done_flags/` (optionally `work_index_list.csv.zst`) under the chosen root; the CLI auto-enables `--watch` so completed jobs write their flag/index entries. Override locations via `--resume-index/--resume-done-dir`.
 - `fetch <url> --webhook-url https://... [--webhook-event DONE --webhook-event FAILED]` — register callbacks right after the job is created.
 - `show <job-id> [--ocr-metrics]` — dump the latest job snapshot, optionally with OCR batch/quota telemetry.
@@ -74,17 +85,13 @@ Run these before pushing or shipping capture-facing changes:
 ```bash
 uv run ruff check --fix --unsafe-fixes
 uvx ty check
-uv run playwright test tests/smoke_capture.spec.ts
+npx playwright test --config=playwright.config.mjs  # or PLAYWRIGHT_BIN=/path/to/playwright-test …
 ```
 
 `./scripts/run_checks.sh` wraps the same sequence for CI. Set `PLAYWRIGHT_BIN=/path/to/playwright-test`
-if you need to invoke the Node-based runner; otherwise the script attempts `uv run playwright test …` and
-prints a warning when the bundled Python CLI lacks the `test` command. When you already know libvips isn’t
-available in a minimal container, export `SKIP_LIBVIPS_CHECK=1` to bypass the preflight warning. Set
-`MDWB_CHECK_METRICS=1` (optionally `CHECK_METRICS_TIMEOUT=<seconds>`) to append the Prometheus health check
-(`scripts/check_metrics.py --timeout … --json`) after the pytest/Playwright stack. When you want to run the
-rich CLI E2E suite locally/CI, set `MDWB_RUN_E2E=1` to have `run_checks.sh` execute `tests/test_e2e_cli.py`
-after the standard subset; the run emits FlowLogger tables so grab the `run_checks` log in CI for postmortems.
+if you need to invoke the Node-based runner; otherwise the script prefers `npx playwright test --config=playwright.config.mjs`
+(which inherits the defaults from PLAN/AGENTS: viewport 1280×2000, DPR 2, reduced motion, light scheme, mask selectors, CDP/BiDi transport via `PLAYWRIGHT_TRANSPORT`). When Node Playwright isn’t installed it falls back to `uv run playwright test` and prints a warning if the Python CLI lacks `test`.
+When you already know libvips isn’t available in a minimal container, export `SKIP_LIBVIPS_CHECK=1` to bypass the preflight warning. Set `MDWB_CHECK_METRICS=1` (optionally `CHECK_METRICS_TIMEOUT=<seconds>`) to append the Prometheus health check. To run the rich CLI E2E suite locally/CI, set `MDWB_RUN_E2E=1` so `run_checks.sh` executes `tests/test_e2e_cli.py` after the standard subset; the run emits FlowLogger tables so grab the `run_checks` log in CI for postmortems.
 
 - Every `run_checks` invocation now emits `tmp/pytest_report.xml` and `tmp/pytest_summary.json`
   (override with `PYTEST_JUNIT_PATH`/`PYTEST_SUMMARY_PATH`). The JSON digest lists totals and the first few

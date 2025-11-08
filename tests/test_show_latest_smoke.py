@@ -156,6 +156,14 @@ def test_show_latest_smoke_manifest_missing_json(tmp_path: Path):
     assert "latest_manifest_index" in result.output
 
 
+def test_show_latest_smoke_metrics_missing_json(tmp_path: Path):
+    _write_pointer_files(tmp_path)
+    (tmp_path / "latest_metrics.json").unlink()
+    result = _invoke_show(tmp_path, "--metrics", "--json")
+    assert result.exit_code == 1
+    assert "latest_metrics.json missing" in result.output
+
+
 def test_show_latest_smoke_metrics_only(tmp_path: Path):
     _write_pointer_files(tmp_path)
     result = _invoke_show(tmp_path, "--metrics", "--no-summary", "--no-manifest", "--no-weekly")

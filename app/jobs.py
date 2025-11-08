@@ -14,6 +14,7 @@ from uuid import uuid4
 import hashlib
 import hmac
 import json
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 import logging
 
 import httpx
@@ -72,6 +73,8 @@ class JobSnapshot(TypedDict, total=False):
     manifest: dict[str, object]
     artifacts: list[dict[str, object]]
     error: str | None
+    profile_id: str | None
+    cache_hit: bool
 
 
 def build_initial_snapshot(
@@ -79,6 +82,8 @@ def build_initial_snapshot(
     *,
     job_id: str,
     settings: Settings | None = None,
+    profile_id: str | None = None,
+    cache_hit: bool = False,
 ) -> JobSnapshot:
     """Construct a baseline snapshot before capture begins."""
 
@@ -97,7 +102,13 @@ def build_initial_snapshot(
         manifest_path="",
         error=None,
     )
+    if profile_id:
+        snapshot["profile_id"] = profile_id
+    if cache_hit:
+        snapshot["cache_hit"] = True
     if manifest:
+        manifest.profile_id = profile_id
+        manifest.cache_hit = cache_hit
         snapshot["manifest"] = manifest.model_dump()
     return snapshot
 RunnerType = Callable[..., Awaitable[tuple[CaptureResult, list[dict[str, object]]]]]
@@ -124,17 +135,74 @@ class JobManager:
         self._webhooks: Dict[str, List[dict[str, Any]]] = {}
         self._pending_webhooks: Dict[str, List[dict[str, Any]]] = {}
         self._webhook_sender = webhook_sender or _default_webhook_sender
+        self._cache_keys: Dict[str, str | None] = {}
 
     async def create_job(self, request: JobCreateRequest) -> JobSnapshot:
         job_id = uuid4().hex
-        snapshot = build_initial_snapshot(url=request.url, job_id=job_id)
+        active_settings = global_settings
+        capture_config = _build_capture_config(request, active_settings)
+        cache_key = _build_cache_key(config=capture_config, settings=active_settings)
+        capture_config.cache_key = cache_key
+        snapshot = build_initial_snapshot(
+            url=request.url,
+            job_id=job_id,
+            profile_id=capture_config.profile_id,
+            cache_hit=False,
+        )
         self._snapshots[job_id] = snapshot.copy()
         self._event_logs[job_id] = []
         self._event_sequences[job_id] = 0
+        self._cache_keys[job_id] = cache_key
         self._broadcast(job_id)
-        task = asyncio.create_task(self._run_job(job_id=job_id, url=request.url))
+
+        cache_record = None
+        if request.reuse_cache:
+            cache_record = self.store.find_cache_hit(cache_key)
+        if cache_record:
+            self.store.register_cached_run(job_id=job_id, source=cache_record)
+            snapshot = self._snapshots[job_id]
+            manifest = self.store.read_manifest(cache_record.id)
+            manifest["cache_hit"] = True
+            snapshot["cache_hit"] = True
+            snapshot["manifest"] = manifest
+            snapshot["manifest_path"] = cache_record.manifest_path
+            total_tiles = cache_record.tiles_total or manifest.get("tiles_total") or 0
+            snapshot["progress"] = {"done": total_tiles, "total": total_tiles}
+            snapshot["artifacts"] = self.store.read_artifacts(cache_record.id)
+            self._snapshots[job_id] = snapshot.copy()
+            self._record_custom_event(
+                job_id,
+                "cache_hit",
+                {
+                    "source_job_id": cache_record.id,
+                    "cache_key": cache_record.cache_key,
+                },
+            )
+            self._set_state(job_id, JobState.DONE)
+            return self._snapshot_payload(job_id)
+
+        task = asyncio.create_task(self._run_job(job_id=job_id, url=request.url, config=capture_config))
         self._tasks[job_id] = task
-        return snapshot.copy()
+        return self._snapshot_payload(job_id)
+
+    async def replay_job(self, manifest: Mapping[str, Any]) -> JobSnapshot:
+        """Re-enqueue a job based on a stored manifest payload."""
+
+        if not isinstance(manifest, Mapping):
+            msg = "Manifest payload must be an object"
+            raise ValueError(msg)
+        url = manifest.get("url")
+        if not isinstance(url, str) or not url.strip():
+            msg = "Manifest is missing a valid 'url'"
+            raise ValueError(msg)
+        profile_id = manifest.get("profile_id")
+        if not isinstance(profile_id, str) or not profile_id.strip():
+            profile_id = None
+        snapshot = await self.create_job(JobCreateRequest(url=url, profile_id=profile_id))
+        metadata = _build_replay_metadata(manifest)
+        if metadata:
+            self._record_custom_event(snapshot["id"], "replay_request", metadata)
+        return snapshot
 
     def get_snapshot(self, job_id: str) -> JobSnapshot:
         snapshot = self._snapshots.get(job_id)
@@ -178,17 +246,30 @@ class JobManager:
         if not subscribers:
             self._event_subscribers.pop(job_id, None)
 
-    async def _run_job(self, *, job_id: str, url: str) -> None:
+    async def _run_job(self, *, job_id: str, url: str, config: CaptureConfig | None = None) -> None:
         storage = self.store
         started_at = datetime.now(timezone.utc)
-        storage.allocate_run(job_id=job_id, url=url, started_at=started_at)
+        profile_id = getattr(config, "profile_id", None)
+        cache_key = self._cache_keys.get(job_id)
+        storage.allocate_run(
+            job_id=job_id,
+            url=url,
+            started_at=started_at,
+            profile_id=profile_id,
+            cache_key=cache_key,
+        )
         storage.update_status(job_id=job_id, status=JobState.CAPTURING)
         pending = self._pending_webhooks.pop(job_id, [])
         if pending:
             _persist_pending_webhooks(storage, pending, job_id)
         try:
             self._set_state(job_id, JobState.CAPTURING)
-            capture_result, tile_artifacts = await self._runner(job_id=job_id, url=url, store=self.store)
+            capture_result, tile_artifacts = await self._runner(
+                job_id=job_id,
+                url=url,
+                store=self.store,
+                config=config,
+            )
             run_record = self.store.fetch_run(job_id)
             manifest_path = str(run_record.manifest_path) if run_record else ""
             snapshot = self._snapshots[job_id]
@@ -199,6 +280,7 @@ class JobManager:
             }
             snapshot["manifest"] = asdict(capture_result.manifest)
             snapshot["artifacts"] = tile_artifacts
+            snapshot["cache_hit"] = bool(capture_result.manifest.cache_hit)
             self._broadcast(job_id)
             self._emit_ocr_event(job_id, capture_result.manifest)
             self._set_state(job_id, JobState.DONE)
@@ -210,6 +292,7 @@ class JobManager:
             raise
         finally:
             self._tasks.pop(job_id, None)
+            self._cache_keys.pop(job_id, None)
 
     def _set_state(self, job_id: str, state: JobState) -> None:
         snapshot = self._snapshots.get(job_id)
@@ -551,6 +634,89 @@ def _apply_ocr_metadata(manifest: CaptureManifest, result: SubmitTilesResult) ->
                 threshold=float(result.quota.limit),
             )
         )
+
+
+def _build_replay_metadata(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Summarize a replay request for event logs/webhooks."""
+
+    summary: dict[str, Any] = {
+        "source_job_id": manifest.get("job_id"),
+        "source_url": manifest.get("url"),
+        "source_profile_id": manifest.get("profile_id"),
+    }
+    environment = manifest.get("environment")
+    if isinstance(environment, Mapping):
+        summary["source_cft_version"] = environment.get("cft_version")
+        summary["source_cft_label"] = environment.get("cft_label")
+        summary["source_playwright_version"] = environment.get("playwright_version")
+    try:
+        digest = hashlib.sha1(json.dumps(manifest, sort_keys=True).encode("utf-8")).hexdigest()
+    except Exception:  # pragma: no cover - defensive guard for unexpected payloads
+        digest = None
+    if digest:
+        summary["manifest_sha1"] = digest[:12]
+    return {key: value for key, value in summary.items() if value not in (None, "", [])}
+
+
+def _build_capture_config(request: JobCreateRequest, settings: Settings) -> CaptureConfig:
+    viewport_width = request.viewport_width or settings.browser.viewport_width
+    viewport_height = request.viewport_height or settings.browser.viewport_height
+    device_scale_factor = request.device_scale_factor or settings.browser.device_scale_factor
+    color_scheme = (request.color_scheme or settings.browser.color_scheme or "light").lower()
+    if color_scheme not in {"light", "dark"}:
+        color_scheme = "light"
+    long_side_px = request.long_side_px or settings.browser.long_side_px
+    return CaptureConfig(
+        url=request.url,
+        viewport_width=viewport_width,
+        viewport_height=viewport_height,
+        device_scale_factor=device_scale_factor,
+        color_scheme=color_scheme,
+        reduced_motion=True,
+        profile_id=request.profile_id,
+        long_side_px=long_side_px,
+    )
+
+
+def _build_cache_key(*, config: CaptureConfig, settings: Settings) -> str:
+    normalized_url = _normalize_url(config.url)
+    payload = {
+        "url": normalized_url,
+        "cft_version": settings.browser.cft_version,
+        "browser_transport": settings.browser.browser_transport,
+        "viewport": {
+            "width": config.viewport_width,
+            "height": config.viewport_height,
+            "device_scale_factor": config.device_scale_factor,
+            "color_scheme": config.color_scheme,
+        },
+        "viewport_overlap_px": settings.browser.viewport_overlap_px,
+        "tile_overlap_px": settings.browser.tile_overlap_px,
+        "long_side_px": config.long_side_px or settings.browser.long_side_px,
+        "screenshot_style_hash": settings.browser.screenshot_style_hash,
+        "mask_selectors": list(settings.browser.screenshot_mask_selectors),
+        "ocr_model": settings.ocr.model,
+        "ocr_use_fp8": settings.ocr.use_fp8,
+        "profile_id": config.profile_id or "",
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _normalize_url(url: str) -> str:
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "http").lower()
+    netloc = (parsed.netloc or "").lower()
+    path = parsed.path or "/"
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    canonical_query = urlencode(sorted(query_pairs))
+    normalized = parsed._replace(
+        scheme=scheme,
+        netloc=netloc,
+        path=path,
+        query=canonical_query,
+        fragment="",
+    )
+    return urlunparse(normalized)
 
 
 def _summarize_ocr_batches(manifest: CaptureManifest) -> dict[str, Any] | None:

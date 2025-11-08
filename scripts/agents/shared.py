@@ -43,12 +43,13 @@ def submit_job(
     http2: bool = True,
     profile: Optional[str] = None,
     ocr_policy: Optional[str] = None,
+    cache: bool = True,
     client: httpx.Client | None = None,
 ) -> dict:
     """Submit a capture job and return the JSON payload."""
 
     with _ctx(client, settings, http2=http2) as active_client:
-        payload: dict[str, object] = {"url": url}
+        payload: dict[str, object] = {"url": url, "reuse_cache": cache}
         if profile:
             payload["profile_id"] = profile
         if ocr_policy:

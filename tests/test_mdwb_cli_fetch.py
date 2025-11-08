@@ -125,6 +125,35 @@ def test_fetch_handles_webhook_failure(monkeypatch):
     assert calls[-1][1] == {"url": "https://foo/hook", "events": ["DONE", "FAILED"]}
 
 
+def test_fetch_cache_flag(monkeypatch):
+    calls: list[dict] = []
+
+    class FakeClient:
+        def post(self, url: str, json=None):  # noqa: ANN001
+            if url == "/jobs":
+                calls.append(json or {})
+                return DummyResponse(200, {"id": "job-555"})
+            return DummyResponse(202)
+
+        def close(self) -> None:  # pragma: no cover - stub
+            return None
+
+    monkeypatch.setattr(mdwb_cli, "_client", lambda settings, http2=True, **_: FakeClient())
+    monkeypatch.setattr(mdwb_cli, "_resolve_settings", lambda base: _fake_settings())
+
+    result = runner.invoke(
+        mdwb_cli.cli,
+        [
+            "fetch",
+            "https://cache.example",
+            "--no-cache",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls and calls[0]["reuse_cache"] is False
+
+
 def test_fetch_resume_skips_completed_url(monkeypatch, tmp_path):
     _write_resume_state(tmp_path, mdwb_cli._resume_hash("https://example.com"), ["https://example.com"])
     monkeypatch.setattr(mdwb_cli, "_resolve_settings", lambda base: _fake_settings())

@@ -10,6 +10,7 @@ import pytest
 import zstandard as zstd
 
 from app.store import StorageConfig, Store
+from app.tiler import TileSlice
 from app.schemas import (
     ConcurrencyWindow,
     ManifestEnvironment,
@@ -33,6 +34,52 @@ def _allocate_run(store: Store, *, job_id: str = "run-123") -> tuple[str, Path]:
     started = datetime(2025, 11, 8, 8, 0, tzinfo=timezone.utc)
     paths = store.allocate_run(job_id=job_id, url="https://example.com", started_at=started)
     return job_id, paths.root
+
+
+def test_store_records_profile_id(tmp_path: Path) -> None:
+    store = _storage(tmp_path)
+    job_id = "run-profile"
+    profile_id = "agent.alpha"
+    store.allocate_run(
+        job_id=job_id,
+        url="https://example.com/profile",
+        started_at=datetime(2025, 11, 8, 7, 0, tzinfo=timezone.utc),
+        profile_id=profile_id,
+    )
+    manifest = {
+        "profile_id": profile_id,
+        "environment": {"cft_version": "chrome-130", "viewport": {"device_scale_factor": 2}},
+    }
+    store.write_manifest(job_id=job_id, manifest=manifest)
+
+    record = store.fetch_run(job_id)
+    assert record is not None
+    assert record.profile_id == profile_id
+
+
+def test_store_read_artifacts(tmp_path: Path) -> None:
+    store = _storage(tmp_path)
+    job_id = "run-artifacts"
+    store.allocate_run(job_id=job_id, url="https://example.com/art", started_at=datetime(2025, 11, 8, 6, 0, tzinfo=timezone.utc))
+    tiles = [
+        TileSlice(
+            index=0,
+            png_bytes=b"tile",
+            sha256="sha0",
+            width=100,
+            height=200,
+            scale=1.0,
+            source_y_offset=0,
+            viewport_y_offset=0,
+            overlap_px=0,
+            top_overlap_sha256=None,
+            bottom_overlap_sha256=None,
+        )
+    ]
+    store.write_tiles(job_id=job_id, tiles=tiles)
+
+    artifacts = store.read_artifacts(job_id)
+    assert artifacts and artifacts[0]["index"] == 0
 
 
 def test_store_persists_sweep_and_validation_metadata(tmp_path: Path) -> None:
@@ -243,7 +290,10 @@ def test_resolve_artifact_blocks_path_escape(tmp_path: Path) -> None:
 
 
 def _tar_members(bundle: Path) -> list[str]:
-    decompressed = zstd.ZstdDecompressor().decompress(bundle.read_bytes())
+    dctx = zstd.ZstdDecompressor()
+    with open(bundle, "rb") as bundle_file:
+        with dctx.stream_reader(bundle_file) as reader:
+            decompressed = reader.read()
     with tarfile.open(fileobj=io.BytesIO(decompressed), mode="r:") as tar:
         return sorted(member.name for member in tar.getmembers())
 

@@ -62,7 +62,11 @@ def _dummy_settings(
         daily_quota_tiles=daily_quota_tiles,
     )
     telemetry = TelemetrySettings(prometheus_port=9000, htmx_sse_heartbeat_ms=4000)
-    storage = StorageSettings(cache_root=Path(".cache"), db_path=Path("runs.db"))
+    storage = StorageSettings(
+        cache_root=Path(".cache"),
+        db_path=Path("runs.db"),
+        profiles_root=Path(".cache") / "profiles",
+    )
     warning_settings = WarningSettings(
         canvas_warning_threshold=3,
         video_warning_threshold=2,

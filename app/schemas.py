@@ -15,6 +15,27 @@ class JobCreateRequest(BaseModel):
 
     url: str = Field(description="Target URL to capture")
     profile_id: str | None = Field(default=None, description="Browser profile identifier")
+    viewport_width: int | None = Field(default=None, ge=1, description="Override viewport width")
+    viewport_height: int | None = Field(default=None, ge=1, description="Override viewport height")
+    device_scale_factor: int | None = Field(default=None, ge=1, description="Override device scale factor")
+    color_scheme: str | None = Field(default=None, description="Override color scheme (light|dark)")
+    long_side_px: int | None = Field(default=None, ge=1, description="Override tile longest side policy")
+    reuse_cache: bool = Field(default=True, description="Reuse cached captures when an identical configuration exists")
+
+
+class ReplayRequest(BaseModel):
+    """Payload for replaying a stored manifest."""
+
+    manifest: dict[str, Any] = Field(description="Manifest JSON to replay")
+
+    @field_validator("manifest")
+    @classmethod
+    def _require_url(cls, value: dict[str, Any]) -> dict[str, Any]:
+        url = value.get("url")
+        if not isinstance(url, str) or not url.strip():
+            msg = "Manifest must include a non-empty 'url' field"
+            raise ValueError(msg)
+        return value
 
 
 class JobSnapshotResponse(BaseModel):
@@ -30,6 +51,8 @@ class JobSnapshotResponse(BaseModel):
         description="Latest manifest payload if available",
     )
     error: str | None = Field(default=None, description="Failure message when state=FAILED")
+    profile_id: str | None = Field(default=None, description="Profile identifier requested for the capture")
+    cache_hit: bool | None = Field(default=None, description="True when the job reused cached artifacts")
 
 
 class ConcurrencyWindow(BaseModel):
@@ -173,6 +196,18 @@ class ManifestMetadata(BaseModel):
     ocr_quota: ManifestOCRQuota | None = Field(
         default=None,
         description="Snapshot of hosted OCR daily quota usage",
+    )
+    profile_id: str | None = Field(
+        default=None,
+        description="Browser profile identifier used for the capture, when specified",
+    )
+    cache_hit: bool | None = Field(
+        default=None,
+        description="True when artifacts were reused from cache instead of running a new capture",
+    )
+    cache_key: str | None = Field(
+        default=None,
+        description="Deterministic hash used to look up cached captures",
     )
 
 

@@ -29,7 +29,7 @@ print(settings.ocr.server_url)
 | `OCR_DAILY_QUOTA_TILES` | *(unset)* | Optional hosted OCR quota (in tiles). When set, manifests emit warnings at 70 % usage. |
 | `OCR_MIN_CONCURRENCY` | `2` | Minimum OCR concurrency window (`environment.ocr_concurrency.min`). |
 | `OCR_MAX_CONCURRENCY` | `8` | Maximum OCR concurrency window (`environment.ocr_concurrency.max`). Must be ≥ min. |
-| `CACHE_ROOT` | `.cache` | Root directory for content-addressed artifacts (tiles, manifests, tar bundles). |
+| `CACHE_ROOT` | `.cache` | Root directory for content-addressed artifacts (tiles, manifests, tar bundles) and persistent Chromium profiles (`CACHE_ROOT/profiles/<id>/storage_state.json`). |
 | `RUNS_DB_PATH` | `runs.db` | SQLite file storing `runs`, `links`, and sqlite-vec embeddings. |
 | `CFT_VERSION` | `chrome-130.0.6723.69` | Chrome for Testing label/build pinned for Playwright; log in every manifest. |
 | `CFT_LABEL` | `Stable-1` | CfT channel label surfaced in `environment.cft_label`. |
@@ -88,6 +88,7 @@ in `app/schemas.py` (see `ManifestEnvironment`, `ManifestTimings`, and
 * OCR request telemetry (`ocr_batches`) including latency, HTTP status, request IDs, and payload sizes, plus hosted quota status (`ocr_quota`) so ops can correlate throttling with DOM complexity
 * Timing metrics (`capture_ms`, `ocr_ms`, `stitch_ms`, `total_ms`) once stages
   execute
+* Cache metadata (`cache_hit`, `cache_key`) so dashboards/CLI output can distinguish fresh captures from cache replays
 
 ```jsonc
 {
@@ -128,7 +129,9 @@ in `app/schemas.py` (see `ManifestEnvironment`, `ManifestTimings`, and
     "overlap_match_ratio": 0.94
   },
   "overlap_match_ratio": 0.94,
-  "validation_failures": []
+  "validation_failures": [],
+  "cache_hit": false,
+  "cache_key": "cache-<sha1>"
 }
 ```
 
@@ -136,7 +139,9 @@ in `app/schemas.py` (see `ManifestEnvironment`, `ManifestTimings`, and
 
 * Always run Playwright with `viewport=1280×2000`, `deviceScaleFactor=2`,
   `colorScheme="light"`, reduced motion, and animation disabling so CfT output
-  is deterministic.
+  is deterministic. The shared `playwright.config.mjs` (used by `scripts/run_checks.sh`
+  and `npx playwright test`) encodes these defaults and respects
+  `PLAYWRIGHT_TRANSPORT` (cdp/bidi) plus mask selectors from env.
 * Tiling policy: longest side ≤1288 px with ≈120 px overlap (Plan §§3, 19.3).
 * Use HTTP/2 (`httpx.AsyncClient(http2=True)`) when sending many OCR tiles to
   the same host; document rate limits + concurrency in manifests so Ops can
@@ -145,3 +150,4 @@ in `app/schemas.py` (see `ManifestEnvironment`, `ManifestTimings`, and
   dashboards/tests in sync with any changes.
 * The warning/blocklist JSONL log now includes `sweep_stats`, overlap ratios, and any `validation_failures`, so Ops can spot retries or seam duplication even when DOM warnings don’t fire. Ensure the log rotation/search tooling ingests the new keys.
 * Prometheus scraping now covers capture/OCR/stitch latencies, warning/blocklist totals, SSE heartbeats, and job completions. Scrape `/metrics` directly or hit the exporter bound to `PROMETHEUS_PORT` when you need a dedicated port.
+* Persistent Chromium profiles live under `CACHE_ROOT/profiles/<id>/storage_state.json`. The UI dropdown and CLI `--profile` flag reuse these directories, and manifests/RunRecords echo `profile_id` so audits can trace which persona captured a run.

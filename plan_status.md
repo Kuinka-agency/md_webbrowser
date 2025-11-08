@@ -1,3 +1,12 @@
 - bd-2n8: docs updated for MDWB_CHECK_METRICS toggle.
 - bd-jm4: prom_scrape_check delegates to check_metrics.
 - bd-3pd/ljl: exporter-url + --json flags shipped.
+- bd-0o0: Playwright config + CDP/BiDi fallback bead opened (PLAN §3).
+- bd-x6v: content-addressed cache reuse implemented (PLAN §3.5/§19.6).
+- bd-9ke: POST /replay API implemented (PLAN §§4/9/21.5).
+- bd-cls: profile_id passthrough implemented (PLAN §7).
+- bd-2p3: Links tab actions bead opened (PLAN §5).
+- bd-4wx: HTMX SSE extension bead opened (PLAN §19.7).
+- bd-hki: Generative E2E guardrail suite bead opened (PLAN §14).
+- bd-l9n: Granian runtime toggle bead opened (PLAN §19.8).
+- bd-e0q: release/regression checklist bead opened (PLAN §20.3).

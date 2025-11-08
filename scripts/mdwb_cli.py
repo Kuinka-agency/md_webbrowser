@@ -802,6 +802,11 @@ def _render_snapshot(snapshot: dict[str, Any], *, meter: _ProgressMeter | None =
     state = snapshot.get("state")
     if state:
         _log_event("state", str(state))
+    profile_id = snapshot.get("profile_id")
+    if profile_id:
+        _log_event("log", f"profile: {profile_id}")
+    if snapshot.get("cache_hit"):
+        _log_event("log", "cache: hit")
     progress = snapshot.get("progress")
     if isinstance(progress, dict):
         text = _format_progress_text(progress, meter=meter)
@@ -865,6 +870,11 @@ def fetch(
         "--resume-done-dir",
         help="Override the default done_flags directory (defaults to RESUME_ROOT/done_flags).",
     ),
+    cache: bool = typer.Option(
+        True,
+        "--cache/--no-cache",
+        help="Reuse cached captures when an identical configuration already exists.",
+    ),
     reuse_session: bool = typer.Option(
         False,
         "--reuse-session/--no-reuse-session",
@@ -926,6 +936,7 @@ def fetch(
             payload: dict[str, object] = {"url": url}
             if profile:
                 payload["profile_id"] = profile
+            payload["reuse_cache"] = cache
             if ocr_policy:
                 payload["ocr"] = {"policy": ocr_policy}
 
@@ -1458,6 +1469,8 @@ def _print_diag_report(
     summary = Table("Field", "Value", title=f"Job {snapshot.get('id', 'unknown')}")
     summary.add_row("URL", snapshot.get("url", "—"))
     summary.add_row("State", str(snapshot.get("state", "—")))
+    summary.add_row("Profile", snapshot.get("profile_id") or "—")
+    summary.add_row("Cache", "hit" if snapshot.get("cache_hit") else "miss")
     summary.add_row("Progress", _format_progress_text(snapshot.get("progress")))
     summary.add_row("Manifest Path", snapshot.get("manifest_path") or "—")
     summary.add_row("Manifest Source", manifest_source if manifest else "not available")

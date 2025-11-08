@@ -55,7 +55,7 @@ EOF
 if [[ $# -gt 0 ]]; then
   PLAYWRIGHT_TARGETS=("$@")
 else
-  PLAYWRIGHT_TARGETS=("tests/smoke_capture.spec.ts")
+  PLAYWRIGHT_TARGETS=()
 fi
 
 run_step() {
@@ -99,16 +99,30 @@ else
   echo
 fi
 
-if [[ -n "${PLAYWRIGHT_BIN:-}" ]]; then
-  run_step "playwright" "${PLAYWRIGHT_BIN}" "${PLAYWRIGHT_TARGETS[@]}"
-elif uv run playwright --help | grep -q "test"; then
-  run_step "playwright" uv run playwright test "${PLAYWRIGHT_TARGETS[@]}"
-else
+run_playwright() {
+  local args=("${PLAYWRIGHT_TARGETS[@]}")
+  if [[ -n "${PLAYWRIGHT_BIN:-}" ]]; then
+    run_step "playwright" "${PLAYWRIGHT_BIN}" "${args[@]}"
+    return
+  fi
+
+  if [[ -x "node_modules/.bin/playwright" ]]; then
+    run_step "playwright" npx playwright test --config=playwright.config.mjs "${args[@]}"
+    return
+  fi
+
+  if uv run playwright --help 2>/dev/null | grep -q "test"; then
+    run_step "playwright" uv run playwright test "${args[@]}"
+    return
+  fi
+
   echo "→ playwright"
   echo "WARN: Playwright CLI missing 'test' subcommand; skipping smoke run."
-  echo "      Install the Node-based Playwright runner or provide PLAYWRIGHT_BIN to enable this step."
+  echo "      Install @playwright/test (Node) or set PLAYWRIGHT_BIN to point at your runner."
   echo
-fi
+}
+
+run_playwright
 
 if [[ "${MDWB_CHECK_METRICS:-0}" == "1" ]]; then
   METRICS_TIMEOUT="${CHECK_METRICS_TIMEOUT:-5.0}"

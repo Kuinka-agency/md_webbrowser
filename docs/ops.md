@@ -39,7 +39,7 @@ uv run python scripts/run_smoke.py \
   - `benchmarks/production/latest_manifest_index.json`
   - `benchmarks/production/latest_summary.md`
   so dashboards/automation can point at a stable path.
-- Run `uv run python scripts/show_latest_smoke.py --manifest --metrics --weekly` to inspect
+- Run `uv run python scripts/show_latest_smoke.py --manifest --metrics --weekly --limit 5 --json` to inspect
   the latest summary/manifest pointers plus the rolling `weekly_summary.json`. Manifest rows include
   overlap ratios and validation failure counts when the data exists, so seam regressions are visible
   without opening individual manifests. The CLI highlights categories that exceed their p95 budgets
@@ -225,10 +225,11 @@ warning spikes, job failures, or SSE stalls exceed their budgets.
   without cracking open sqlite. Pass `--vector "[0.1,0.2,...]"` for inline JSON or `--json` when automation needs
   structured matches.
 - `uv run python scripts/mdwb_cli.py diag <job-id>` prints CfT/Playwright metadata, capture/OCR/stitch timings,
-  warnings, and blocklist hits for a run (with `--json` for automation), matching the incident-response playbook in PLAN §20.
+  warnings, blocklist hits, the active profile id, and the new cache status for a run (with `--json` for automation),
+  matching the incident-response playbook in PLAN §20.
 
 ### CLI Quick Reference
-- **Diag:** `mdwb_cli.py diag <job-id> [--json]` – one-stop capture/OCR/stitch metadata for incidents.
+- **Diag:** `mdwb_cli.py diag <job-id> [--json]` – one-stop capture/OCR/stitch metadata for incidents (now includes profile + cache hit/miss).
 - **Hooks:** `mdwb_cli.py watch <job-id> --on state:DONE='notify-send mdwb done'` (and `fetch --watch --on …`) – run shell commands whenever streamed events fire; commands receive `MDWB_EVENT_*` env vars.
 - **Warnings:** `mdwb_cli.py warnings tail --json --count 100` – stream warning/blocklist incidents with sweep/validation metadata ready for dashboards.
 - **Artifacts & bundles:** `mdwb_cli.py jobs artifacts manifest|markdown|links` and `jobs bundle <job-id> --out bundle.tar.zst` – fetch Markdown/links/manifests or the tarball without manual curl.

@@ -211,6 +211,10 @@ temp.lock.owner.json
 # Share export test output
 out/
 
+# Playwright artifacts (kept if committed explicitly)
+.playwright/
+!playwright.config.mjs
+
 # Cryptographic signing keys (Ed25519 key pairs for bundle signing)
 signing-*.key
 signing-*.pub

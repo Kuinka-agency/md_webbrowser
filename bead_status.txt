@@ -3,4 +3,13 @@ bd-bb4 Prom metrics health smoke — scripts/check_metrics.py + tests shipped an
 Next bead standby: monitoring Prom scrape rollout to confirm dashboards/alerts consume mdwb_* metrics; ready to pick up tkq slice once telemetry consumers give the green light.
 bd-ptest-cli Stream, demo, SSE helpers, fetch hook guards, diag manifest fallbacks, and warnings CLI missing-log handling are under pytest (`tests/test_mdwb_cli_events.py` covers `_iter_sse` + `_stream_job`; `tests/test_mdwb_cli_fetch.py` checks `--on` validation + hook passing; `tests/test_mdwb_cli_diag.py` verifies manifest-error reporting; `tests/test_mdwb_cli_warnings.py` now covers the missing-log path; `tests/test_mdwb_cli_show.py` covers demo snapshot/links). Targeted CLI subset, ruff --fix, and uvx ty check all pass. Next up: audit remaining CLI helpers for redundant stubs + ensure run_checks.sh stays in sync.
 bd-ptest-reporting run_checks now writes JUnit + JSON summaries (`tmp/pytest_report.xml`, `tmp/pytest_summary.json`) via scripts/report_pytest_summary.py, and the new unit tests (`tests/test_report_pytest_summary.py`) keep the parser honest; documentation updates pending once README/docs/ops reservations clear.
+bd-0o0 Playwright config + transport fallback — tracking the shared Playwright config + CDP/BiDi switch so §§3/19 align with AGENTS.
+bd-9ke Implement /replay API — FastAPI now exposes POST /replay (ReplayRequest schema, JobManager.replay_job, event logging, tests/test_api_replay.py).
+bd-cls Profile_id passthrough & persistent contexts — done: JobManager/store now persist profile ids, manifests/RunRecord echo them, CLI/SSE surface them, and profiles reuse `.cache/profiles/<id>/storage_state.json`.
+bd-2p3 Links tab actions + DOM/OCR deltas — UI/links.json upgrades for per-domain grouping, inline actions, DOM assist badges.
+bd-4wx Adopt HTMX SSE extension — replaces bespoke EventSource JS with declarative `hx-ext="sse"` markup + tests.
+bd-x6v Content-addressed cache reuse — DONE: `/jobs` now hashes (url + CfT + viewport + DSF + OCR model + profile), stores cache keys in SQLite/manifests, surfaces `cache_hit` in API/SSE/CLI, and adds `mdwb fetch --cache/--no-cache`.
+bd-hki Generative E2E guardrail tests — stands up `tests/test_e2e_generated.py` + run_checks toggle.
+bd-l9n Granian runtime toggle + docs — adds optional Granian entrypoint + ops docs.
+bd-e0q Release + regression checklist docs — composes the §20.3 playbook for CfT/model upgrades.
 bd-dex Agent starter docs/tests reaffirmed the `--out` pathways (README + PLAN lines added); awaiting further requirements before touching code again.

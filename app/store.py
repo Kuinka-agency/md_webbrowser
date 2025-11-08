@@ -16,7 +16,7 @@ import tarfile
 
 import sqlite_vec
 import zstandard as zstd
-from sqlalchemy import Column, event, text
+from sqlalchemy import Column, event, text, desc
 from sqlalchemy.dialects.sqlite import JSON as SQLITE_JSON
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
@@ -61,6 +61,8 @@ class RunRecord(SQLModel, table=True):
     sweep_overlap_pairs: int | None = None
     overlap_match_ratio: float | None = None
     validation_failure_count: int | None = None
+    profile_id: str | None = None
+    cache_key: str | None = None
 
 
 class LinkRecord(SQLModel, table=True):
@@ -114,6 +116,7 @@ class RunPaths:
     markdown_path: Path
     links_path: Path
     dom_snapshot_path: Path
+    artifacts_manifest_path: Path
 
     @classmethod
     def from_url(cls, *, url: str, started_at: datetime, config: StorageConfig) -> RunPaths:
@@ -130,10 +133,12 @@ class RunPaths:
             markdown_path=run_root / "out.md",
             links_path=run_root / "links.json",
             dom_snapshot_path=artifacts / "dom.html",
+            artifacts_manifest_path=artifacts / "artifacts.json",
         )
 
     def ensure_directories(self) -> None:
         self.tiles_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
     def bundle_path(self) -> Path:
         return self.root / "bundle.tar.zst"
@@ -149,6 +154,7 @@ class RunPaths:
             markdown_path=root / "out.md",
             links_path=root / "links.json",
             dom_snapshot_path=root / "artifact" / "dom.html",
+            artifacts_manifest_path=root / "artifact" / "artifacts.json",
         )
 
 
@@ -187,6 +193,8 @@ class Store:
             "sweep_overlap_pairs": "INTEGER",
             "overlap_match_ratio": "REAL",
             "validation_failure_count": "INTEGER",
+            "profile_id": "TEXT",
+            "cache_key": "TEXT",
         }
         with self.engine.begin() as conn:
             existing = {
@@ -202,7 +210,15 @@ class Store:
         with Session(self.engine) as session:
             yield session
 
-    def allocate_run(self, *, job_id: str, url: str, started_at: datetime) -> RunPaths:
+    def allocate_run(
+        self,
+        *,
+        job_id: str,
+        url: str,
+        started_at: datetime,
+        profile_id: str | None = None,
+        cache_key: str | None = None,
+    ) -> RunPaths:
         paths = RunPaths.from_url(url=url, started_at=started_at, config=self.config)
         paths.ensure_directories()
         record = RunRecord(
@@ -211,11 +227,69 @@ class Store:
             started_at=started_at,
             cache_path=str(paths.root),
             manifest_path=str(paths.manifest_path),
+            profile_id=profile_id,
+            cache_key=cache_key,
         )
         with self.session() as session:
             session.add(record)
             session.commit()
         return paths
+
+    def find_cache_hit(self, cache_key: str | None) -> RunRecord | None:
+        if not cache_key:
+            return None
+        with self.session() as session:
+            statement = (
+                select(RunRecord)
+                .where(
+                    RunRecord.cache_key == cache_key,
+                    RunRecord.status == "DONE",
+                )
+                .order_by(desc(RunRecord.finished_at))
+            )
+            for record in session.exec(statement):
+                try:
+                    manifest_path = Path(record.manifest_path)
+                except TypeError:
+                    continue
+                if manifest_path.exists():
+                    return record
+        return None
+
+    def register_cached_run(self, *, job_id: str, source: RunRecord) -> None:
+        finished_at = source.finished_at or datetime.now(timezone.utc)
+        cloned = RunRecord(
+            id=job_id,
+            url=source.url,
+            started_at=finished_at,
+            finished_at=finished_at,
+            status="DONE",
+            cache_path=source.cache_path,
+            manifest_path=source.manifest_path,
+            ocr_provider=source.ocr_provider,
+            ocr_model=source.ocr_model,
+            cft_label=source.cft_label,
+            cft_version=source.cft_version,
+            playwright_version=source.playwright_version,
+            browser_transport=source.browser_transport,
+            screenshot_style_hash=source.screenshot_style_hash,
+            long_side_px=source.long_side_px,
+            device_scale_factor=source.device_scale_factor,
+            tiles_total=source.tiles_total,
+            capture_ms=source.capture_ms,
+            ocr_ms=source.ocr_ms,
+            stitch_ms=source.stitch_ms,
+            sweep_shrink_events=source.sweep_shrink_events,
+            sweep_retry_attempts=source.sweep_retry_attempts,
+            sweep_overlap_pairs=source.sweep_overlap_pairs,
+            overlap_match_ratio=source.overlap_match_ratio,
+            validation_failure_count=source.validation_failure_count,
+            profile_id=source.profile_id,
+            cache_key=source.cache_key,
+        )
+        with self.session() as session:
+            session.add(cloned)
+            session.commit()
 
     def register_webhook(self, *, job_id: str, url: str, events: Sequence[str]) -> WebhookRecord:
         normalized_events = list(events)
@@ -367,7 +441,13 @@ class Store:
                 }
             )
 
+        self._write_artifacts_manifest(paths, artifacts)
         return artifacts
+
+    def _write_artifacts_manifest(self, paths: RunPaths, artifacts: Sequence[Mapping[str, Any]]) -> None:
+        payload = [dict(item) for item in artifacts]
+        paths.artifacts_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.artifacts_manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def write_links(self, *, job_id: str, links: Sequence[Mapping[str, object]]) -> Path:
         paths = self._paths_for_job(job_id)
@@ -381,6 +461,26 @@ class Store:
         paths.markdown_path.parent.mkdir(parents=True, exist_ok=True)
         paths.markdown_path.write_text(content, encoding="utf-8")
         return paths.markdown_path
+
+    def read_artifacts(self, job_id: str) -> list[dict[str, Any]]:
+        paths = self._paths_for_job(job_id)
+        manifest_path = paths.artifacts_manifest_path
+        if manifest_path.exists():
+            try:
+                return json.loads(manifest_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pass
+        artifacts: list[dict[str, Any]] = []
+        if paths.tiles_dir.exists():
+            for tile_path in sorted(paths.tiles_dir.glob("tile_*.png")):
+                index = _parse_tile_index(tile_path.name)
+                artifacts.append(
+                    {
+                        "index": index,
+                        "path": str(tile_path.relative_to(paths.root)),
+                    }
+                )
+        return artifacts
 
     def read_manifest(self, job_id: str) -> dict[str, Any]:
         record = self.fetch_run(job_id)
@@ -518,6 +618,14 @@ def _create_engine(db_path: Path):
     return engine
 
 
+def _parse_tile_index(filename: str) -> int:
+    try:
+        stem = Path(filename).stem
+        return int(stem.split("_")[-1])
+    except Exception:
+        return -1
+
+
 def _apply_manifest_metadata(record: RunRecord, manifest: Mapping[str, object] | Any) -> None:
     manifest_dict = _manifest_to_dict(manifest)
 
@@ -551,6 +659,8 @@ def _apply_manifest_metadata(record: RunRecord, manifest: Mapping[str, object] |
         _set("ocr_model", manifest_dict.get("model"))
         _set("ocr_provider", manifest_dict.get("ocr_provider"))
         _set_int("device_scale_factor", manifest_dict.get("device_scale_factor"))
+    _set("profile_id", manifest_dict.get("profile_id"))
+    _set("cache_key", manifest_dict.get("cache_key"))
 
     timings = manifest_dict.get("timings")
     if isinstance(timings, Mapping):

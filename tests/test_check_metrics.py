@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from scripts import check_metrics
@@ -241,6 +242,24 @@ def test_run_check_json_mixed_results(monkeypatch):
     assert payload["failed_count"] == 1
     assert payload["targets"][0] == {"url": "http://api/metrics", "ok": True, "duration_ms": durations["http://api/metrics"]}
     assert payload["targets"][1]["ok"] is False
+
+
+def test_run_check_json_reports_total_duration(monkeypatch):
+    def fake_probe(url: str, timeout: float) -> float:  # noqa: ANN001
+        return {
+            "http://api/metrics": 5.5,
+            "http://localhost:9100/metrics": 7.5,
+        }[url]
+
+    monkeypatch.setattr(check_metrics, "_probe", fake_probe)
+    monkeypatch.setattr(check_metrics, "_load_config", lambda: StubConfig({"API_BASE_URL": "http://api", "PROMETHEUS_PORT": 9100}))
+
+    result = runner.invoke(check_metrics.cli, ["--json", "--timeout", "1.5"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert payload["total_duration_ms"] == pytest.approx(13.0)
 
 
 def test_run_check_console_outputs_duration(monkeypatch):

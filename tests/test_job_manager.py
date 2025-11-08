@@ -4,7 +4,7 @@ import asyncio
 import sys
 import types
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 from pathlib import Path
 
 from dataclasses import dataclass
@@ -63,6 +63,9 @@ except OSError:  # pyvips missing in CI
         warnings: list
         overlap_match_ratio: float
         validation_failures: list
+        profile_id: str | None = None
+        cache_key: str | None = None
+        cache_hit: bool = False
         ocr_ms: int | None = None
         stitch_ms: int | None = None
         ocr_batches: list | None = None
@@ -76,6 +79,7 @@ except OSError:  # pyvips missing in CI
 from app.jobs import JobManager, JobState  # noqa: E402
 from app.schemas import JobCreateRequest  # noqa: E402
 from app.store import StorageConfig, Store  # noqa: E402
+from app.tiler import TileSlice  # noqa: E402
 
 
 async def _fake_runner(*, job_id: str, url: str, store: Store, config=None):  # noqa: ANN001
@@ -132,8 +136,27 @@ async def _fake_runner(*, job_id: str, url: str, store: Store, config=None):  # 
             "threshold_ratio": 0.7,
             "warning_triggered": False,
         },
+        profile_id=getattr(config, "profile_id", None),
+        cache_key=getattr(config, "cache_key", None),
     )
-    return CaptureResult(tiles=[], manifest=manifest), []
+    tiles = [
+        TileSlice(
+            index=0,
+            png_bytes=b"tile",
+            sha256="sha0",
+            width=100,
+            height=100,
+            scale=1.0,
+            source_y_offset=0,
+            viewport_y_offset=0,
+            overlap_px=0,
+            top_overlap_sha256=None,
+            bottom_overlap_sha256=None,
+        )
+    ]
+    artifacts = store.write_tiles(job_id=job_id, tiles=tiles)
+    store.write_manifest(job_id=job_id, manifest=manifest)
+    return CaptureResult(tiles=tiles, manifest=manifest), artifacts
 
 
 @pytest.mark.asyncio
@@ -266,6 +289,71 @@ async def test_job_manager_subscribe_events_stream(tmp_path: Path):
         assert event["sequence"] > last_sequence
     finally:
         manager.unsubscribe_events(job_id, queue)
+
+
+@pytest.mark.asyncio
+async def test_job_manager_passes_profile_id_to_runner(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    captured: dict[str, Any] = {}
+
+    async def runner(*, job_id: str, url: str, store: Store, config=None):  # noqa: ANN001
+        captured["profile_id"] = getattr(config, "profile_id", None)
+        return await _fake_runner(job_id=job_id, url=url, store=store, config=config)
+
+    manager = JobManager(store=Store(config), runner=runner)
+    snapshot = await manager.create_job(
+        JobCreateRequest(url="https://example.com/profile", profile_id="agent-alpha")
+    )
+    job_id = snapshot["id"]
+    await manager._tasks[job_id]
+
+    assert snapshot["profile_id"] == "agent-alpha"
+    assert captured["profile_id"] == "agent-alpha"
+    record = manager.store.fetch_run(job_id)
+    assert record is not None and record.profile_id == "agent-alpha"
+
+
+@pytest.mark.asyncio
+async def test_job_manager_reuses_cache(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    manager = JobManager(store=Store(config), runner=_fake_runner)
+
+    first = await manager.create_job(JobCreateRequest(url="https://example.com/cache", reuse_cache=False))
+    await manager._tasks[first["id"]]
+    source_record = manager.store.fetch_run(first["id"])
+    assert source_record is not None
+    assert source_record.cache_key is not None
+    assert manager.store.find_cache_hit(source_record.cache_key) is not None
+
+    second = await manager.create_job(JobCreateRequest(url="https://example.com/cache"))
+
+    assert second["state"] == JobState.DONE.value
+    assert second["cache_hit"] is True
+    assert second["progress"]["done"] == second["progress"]["total"]
+    assert second["artifacts"], "Cache hit should include artifact metadata"
+    assert second["id"] not in manager._tasks
+
+
+@pytest.mark.asyncio
+async def test_cache_key_respects_overrides(tmp_path: Path):
+    config = StorageConfig(cache_root=tmp_path / "cache", db_path=tmp_path / "runs.db")
+    manager = JobManager(store=Store(config), runner=_fake_runner)
+
+    first = await manager.create_job(
+        JobCreateRequest(url="https://example.com/override", viewport_width=1400, reuse_cache=False)
+    )
+    await manager._tasks[first["id"]]
+
+    same_override = await manager.create_job(
+        JobCreateRequest(url="https://example.com/override", viewport_width=1400)
+    )
+    assert same_override["cache_hit"] is True
+
+    different_override = await manager.create_job(
+        JobCreateRequest(url="https://example.com/override", viewport_width=1200)
+    )
+    assert different_override["state"] == JobState.BROWSER_STARTING
+    await manager._tasks[different_override["id"]]
 
 
 @pytest.mark.asyncio

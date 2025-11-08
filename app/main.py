@@ -24,6 +24,7 @@ from app.schemas import (
     EmbeddingSearchResponse,
     JobCreateRequest,
     JobSnapshotResponse,
+    ReplayRequest,
     SectionEmbeddingMatch,
     WebhookRegistrationRequest,
     WebhookSubscription,
@@ -140,6 +141,8 @@ def _snapshot_to_response(snapshot: JobSnapshot) -> JobSnapshotResponse:
         manifest_path=snapshot.get("manifest_path"),
         manifest=manifest,
         error=snapshot.get("error"),
+        profile_id=snapshot.get("profile_id"),
+        cache_hit=snapshot.get("cache_hit"),
     )
 
 
@@ -176,6 +179,17 @@ async def fetch_job(job_id: str) -> JobSnapshotResponse:
         snapshot = JOB_MANAGER.get_snapshot(job_id)
     except KeyError as exc:  # pragma: no cover - runtime only
         raise HTTPException(status_code=404, detail="Job not found") from exc
+    return _snapshot_to_response(snapshot)
+
+
+@app.post("/replay", response_model=JobSnapshotResponse, status_code=status.HTTP_202_ACCEPTED)
+async def replay_job(request: ReplayRequest) -> JobSnapshotResponse:
+    """Replay a stored manifest by enqueueing a new capture with the same URL/profile."""
+
+    try:
+        snapshot = await JOB_MANAGER.replay_job(request.manifest)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _snapshot_to_response(snapshot)
 
 
@@ -375,6 +389,9 @@ def _snapshot_events(snapshot: JobSnapshot) -> list[tuple[str, str]]:
         done = progress.get("done", 0)
         total = progress.get("total", 0)
         events.append(("progress", f"{done} / {total} tiles"))
+    profile_id = snapshot.get("profile_id")
+    if profile_id:
+        events.append(("profile", str(profile_id)))
     manifest = snapshot.get("manifest")
     if manifest:
         events.append(("manifest", json.dumps(manifest)))

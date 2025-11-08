@@ -79,6 +79,7 @@ class StorageSettings:
 
     cache_root: Path
     db_path: Path
+    profiles_root: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,9 +292,11 @@ def get_settings(env_path: str = ".env") -> Settings:
         prometheus_port=_int(cfg, "PROMETHEUS_PORT", default=9000),
         htmx_sse_heartbeat_ms=_int(cfg, "HTMX_SSE_HEARTBEAT_MS", default=4000),
     )
+    cache_root = Path(cfg("CACHE_ROOT", default=".cache"))
     storage = StorageSettings(
-        cache_root=Path(cfg("CACHE_ROOT", default=".cache")),
+        cache_root=cache_root,
         db_path=Path(cfg("RUNS_DB_PATH", default="runs.db")),
+        profiles_root=cache_root / "profiles",
     )
     warning_settings = WarningSettings(
         canvas_warning_threshold=_int(cfg, "CANVAS_WARNING_THRESHOLD", default=3),
