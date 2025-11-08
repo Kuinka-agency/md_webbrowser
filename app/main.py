@@ -228,13 +228,14 @@ async def job_events(job_id: str, request: Request, since: str | None = None) ->
                     event_entry = await asyncio.wait_for(queue.get(), timeout=5)
                     heartbeat = 0
                     sequence = _extract_sequence(event_entry)
-                    if sequence is not None and last_sequence is not None and sequence <= last_sequence:
+                    if sequence is not None and last_sequence is not None and sequence < last_sequence:
                         continue
                     if sequence is not None:
                         last_sequence = sequence
                     yield _serialize_log_entry(event_entry) + "\n"
                 except asyncio.TimeoutError:
                     heartbeat += 1
+                    metrics.increment_sse_heartbeat()
                     heartbeat_entry = {
                         "event": "heartbeat",
                         "timestamp": datetime.now(timezone.utc).isoformat(),

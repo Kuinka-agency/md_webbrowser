@@ -594,11 +594,11 @@ _2025-11-08 — PinkCreek (bd-ug0) threading the new guards into automated runne
 
 ### 19.14 Hosted olmOCR CLI integration
 
-_2025-11-08 — PinkCreek (bd-ug0) replaced the placeholder with the Typer/Rich CLI plus API_BASE_URL/MDWB_API_KEY plumbing; next up is wiring nightly smoke + weekly latency harnesses._
+_2025-11-08 — PinkCreek (bd-ug0) replaced the placeholder with the Typer/Rich CLI plus API_BASE_URL/MDWB_API_KEY plumbing; next up is wiring nightly smoke + weekly latency harnesses. FuchsiaMountain (bd-rn4/4dq) subsequently imported the upstream GPU/vLLM docs (`docs/olmocr_cli_tool_documentation.md`, `docs/olmocr_cli_integration.md`) and staged `scripts/setup_olmocr_cuda12.sh` so the CUDA flow stays in lockstep with the CLI._
 - **Scripts + docs.** Copy `scripts/olmocr_cli.py` and `docs/olmocr_cli.md` from `/data/projects/olmocr/` (the Typer CLI + documentation) into this repo. Treat them as the blessed way to run batch jobs or debug hosted OCR latency outside the web UI.
 - **Config surface.** Keep the CLI defaulting to the hosted API URL; expose knobs for `--server-url`, `--workers`, and `--tensor-parallel-size` but document that TP>1 is only relevant if we later reintroduce local inference.
 - **Ops usage.** Point on-call guides to `olmocr_cli.py run --workspace …` for reproducing customer issues quickly, since it already filters noisy logs and streams ETA.
-- **Maintenance.** When we upgrade dependency pins (PyTorch, FlashInfer, etc.) in the CLI’s source repo, mirror the updates here so the instructions never drift.
+- **Maintenance.** When we upgrade dependency pins (PyTorch, FlashInfer, etc.) in the CLI’s source repo, mirror the updates here so the instructions never drift. The integration doc (`docs/olmocr_cli_integration.md`) tracks the merge plan for the richer GPU CLI with our existing API helpers.
 
 References: [1]–[12] (Hugging Face model card, olmOCR paper, Allen AI release notes, Chrome for Testing blog, Playwright issue, Playwright release notes, Scrapfly scroll guide, pyvips docs, sqlite-vec repo, htmx SSE extension, Granian repo, PyPI entry).
 
@@ -620,7 +620,7 @@ _2025-11-08 — PinkCreek (bd-ug0) designing ops automation: smoke/latency job r
   - `HighCaptureLatency`: p95 capture_duration > 120s for 15 minutes.
   - `OCRThrottleSpike`: `ocr_retry_total{reason="throttle"}` rate > 5/min.
   - `SSEDrop`: SSE heartbeat gap > 12s (monitor via HTMX ping endpoint).
-_2025-11-08 — WhiteCastle (bd-7sx) wired Prometheus instrumentation (`prometheus-fastapi-instrumentator` + background exporter on `PROMETHEUS_PORT`) and custom metrics covering capture/OCR/stitch histograms, warning/blocklist counters, SSE heartbeats, and job completion totals. `/metrics` now exposes the same registry for local smoke checks and CI._
+_2025-11-08 — WhiteCastle (bd-7sx) wired Prometheus instrumentation (`prometheus-fastapi-instrumentator` + background exporter on `PROMETHEUS_PORT`) and custom metrics covering capture/OCR/stitch histograms, warning/blocklist counters, SSE/NDJSON heartbeats, and job completion totals. `/metrics` now exposes the same registry for local smoke checks and CI._
 
 ### 20.3 Release & Regression Process
 - **Chrome for Testing pinning:** upgrade CfT monthly; run the viewport sweep regression test plus the full-page omission golden test before merging. Record the CfT tag in `manifest.json` and release notes.

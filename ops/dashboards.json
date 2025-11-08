@@ -9,12 +9,16 @@
           "type": "timeseries",
           "metrics": [
             {
-              "query": "histogram_quantile(0.95, sum(rate(capture_duration_seconds_bucket{job=\"mdwb\"}[5m])) by (le))",
+              "query": "histogram_quantile(0.95, sum(rate(mdwb_capture_duration_seconds_bucket[5m])) by (le))",
               "label": "capture p95"
             },
             {
-              "query": "histogram_quantile(0.95, sum(rate(ocr_duration_seconds_bucket{job=\"mdwb\"}[5m])) by (le))",
+              "query": "histogram_quantile(0.95, sum(rate(mdwb_ocr_duration_seconds_bucket[5m])) by (le))",
               "label": "ocr p95"
+            },
+            {
+              "query": "histogram_quantile(0.95, sum(rate(mdwb_stitch_duration_seconds_bucket[5m])) by (le))",
+              "label": "stitch p95"
             }
           ],
           "thresholds": [
@@ -23,12 +27,16 @@
           ]
         },
         {
-          "id": "tiling-runtime",
+          "id": "job-throughput",
           "type": "stat",
           "metrics": [
             {
-              "query": "sum(rate(tiles_processed_total{job=\"mdwb\"}[5m]))",
-              "label": "tiles/sec"
+              "query": "sum(rate(mdwb_job_completions_total{state=\"DONE\"}[5m]))",
+              "label": "jobs/min (done)"
+            },
+            {
+              "query": "sum(rate(mdwb_job_completions_total{state=\"FAILED\"}[5m]))",
+              "label": "jobs/min (failed)"
             }
           ]
         }
@@ -42,15 +50,15 @@
           "type": "table",
           "metrics": [
             {
-              "query": "sum(increase(smoke_jobs_total{status=\"success\"}[1d])) by (category)",
-              "label": "success"
+              "query": "sum(increase(mdwb_job_completions_total{state=\"DONE\"}[1d]))",
+              "label": "jobs done (24h)"
             },
             {
-              "query": "sum(increase(smoke_jobs_total{status=\"failed\"}[1d])) by (category)",
-              "label": "failed"
+              "query": "sum(increase(mdwb_job_completions_total{state=\"FAILED\"}[1d]))",
+              "label": "jobs failed (24h)"
             }
           ],
-          "notes": "Smoke job counters exported via scripts/run_smoke.py uploader once API endpoints land."
+          "notes": "Job completion counters sourced from Prometheus so smoke dashboards can alert without parsing manifests."
         },
         {
           "id": "weekly-summary-json",
@@ -67,12 +75,22 @@
           "type": "timeseries",
           "metrics": [
             {
-              "query": "rate(htmx_sse_heartbeat_gap_seconds_sum[5m]) / rate(htmx_sse_heartbeat_gap_seconds_count[5m])",
-              "label": "avg gap"
+              "query": "rate(mdwb_sse_heartbeat_total[5m])",
+              "label": "heartbeats/sec"
             }
           ],
           "thresholds": [
-            {"value_ms": 12000, "label": "max gap"}
+            {"value": 0.1, "label": "min heartbeat rate"}
+          ]
+        },
+        {
+          "id": "warning-volume",
+          "type": "bar-gauge",
+          "metrics": [
+            {
+              "query": "sum(increase(mdwb_capture_warnings_total[1h])) by (code)",
+              "label": "warnings/hr"
+            }
           ]
         },
         {
@@ -80,8 +98,8 @@
           "type": "bar-gauge",
           "metrics": [
             {
-              "query": "sum(increase(blocklist_injections_total[1h])) by (domain)",
-              "label": "injections/hr"
+              "query": "sum(increase(mdwb_blocklist_hits_total[1h])) by (selector)",
+              "label": "blocklist hits/hr"
             }
           ]
         }

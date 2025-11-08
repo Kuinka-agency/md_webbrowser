@@ -95,26 +95,41 @@ def increment_sse_heartbeat() -> None:
 def _extract_timing(manifest: Any, field: str) -> float | None:
     value = getattr(manifest, field, None)
     if value is not None:
-        return float(value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
     if isinstance(manifest, Mapping):
         direct = manifest.get(field)
         if direct is not None:
-            return float(direct)
+            try:
+                return float(direct)
+            except (TypeError, ValueError):
+                return None
     timings = getattr(manifest, "timings", None)
     if timings is not None:
         nested = getattr(timings, field, None)
         if nested is not None:
-            return float(nested)
+            try:
+                return float(nested)
+            except (TypeError, ValueError):
+                return None
         if isinstance(timings, Mapping):
             nested = timings.get(field)
             if nested is not None:
-                return float(nested)
+                try:
+                    return float(nested)
+                except (TypeError, ValueError):
+                    return None
     if isinstance(manifest, Mapping):
         timings = manifest.get("timings")
         if isinstance(timings, Mapping):
             nested = timings.get(field)
             if nested is not None:
-                return float(nested)
+                try:
+                    return float(nested)
+                except (TypeError, ValueError):
+                    return None
     return None
 
 

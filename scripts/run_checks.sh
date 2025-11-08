@@ -28,8 +28,10 @@ run_step "pytest" uv run pytest \
   tests/test_mdwb_cli_events.py \
   tests/test_mdwb_cli_webhooks.py \
   tests/test_mdwb_cli_fetch.py \
+  tests/test_mdwb_cli_artifacts.py \
   tests/test_olmocr_cli_config.py \
   tests/test_check_env.py \
   tests/test_show_latest_smoke.py \
+  tests/test_metrics.py \
   tests/test_api_webhooks.py
 run_step "playwright" uv run playwright test "${PLAYWRIGHT_TARGETS[@]}"

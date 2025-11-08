@@ -24,6 +24,7 @@ See `PLAN_TO_IMPLEMENT_MARKDOWN_WEB_BROWSER_PROJECT.md` §§2–5, 19 for the fu
    - Python 3.13, uv ≥0.8, and the system deps Playwright requires.
    - Install the CfT build Playwright expects: `playwright install chromium --with-deps --channel=cft`.
    - Create/sync the env: `uv venv --python 3.13 && uv sync`.
+   - Optional (GPU/olmOCR power users): run `scripts/setup_olmocr_cuda12.sh` to provision CUDA 12.6 + the local vLLM toolchain described in `docs/olmocr_cli_tool_documentation.md`.
 2. **Configure environment**
    - Copy `.env.example` → `.env`.
    - Fill in OCR creds, `API_BASE_URL`, CfT label/build, screenshot style hash overrides, webhook secret, etc.
@@ -46,7 +47,7 @@ See `PLAN_TO_IMPLEMENT_MARKDOWN_WEB_BROWSER_PROJECT.md` §§2–5, 19 for the fu
 - `dom links --job-id <id>` — render the stored `links.json` (anchors/forms/headings/meta).
 - `demo snapshot|stream|events` — exercise the demo endpoints without hitting a live pipeline.
 
-The CLI reads `API_BASE_URL` + `MDWB_API_KEY` from `.env`; override with `--api-base` when targeting staging.
+The CLI reads `API_BASE_URL` + `MDWB_API_KEY` from `.env`; override with `--api-base` when targeting staging. For CUDA/vLLM workflows, see `docs/olmocr_cli_tool_documentation.md` and `docs/olmocr_cli_integration.md` for detailed setup + merge notes.
 
 ## Prerequisites & environment
 - **Chrome for Testing pin:** Set `CFT_VERSION` + `CFT_LABEL` in `.env` so manifests and ops dashboards stay consistent. Re-run `playwright install` whenever the label/build changes.

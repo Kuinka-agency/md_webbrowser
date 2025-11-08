@@ -78,6 +78,11 @@ before publishing the Monday report. Append `--json` when you need the payload f
 Publish the summary in Monday’s ops update and attach the most recent
 `benchmarks/production/<DATE>/manifest_index.json` for traceability.
 
+> **GPU/vLLM workflows:** if you need to run the smoke suite against a local olmOCR deployment,
+> bootstrap the CUDA 12.6 stack with `scripts/setup_olmocr_cuda12.sh` first. The script installs
+> the required CUDA/GCC toolchain, provisions `.venv`, and runs a CLI smoke test using the
+> settings documented in `docs/olmocr_cli_tool_documentation.md`.
+
 ## Troubleshooting
 - **API unreachable**: make sure `API_BASE_URL` resolves from the machine running the
   script; set `MDWB_API_KEY` if the deployment requires auth.
@@ -104,6 +109,10 @@ Publish the summary in Monday’s ops update and attach the most recent
   surface the breadcrumbs even without tailing the log.
 - Rotate/ship the log via your usual log aggregation tooling; the file is plain JSONL
   and safe to ingest into Loki/Elastic/GCS.
+
+Need a deeper dive into the CLI roadmap? See `docs/olmocr_cli_integration.md` for the plan to
+merge the upstream CUDA-friendly CLI with our existing API helpers so ops aren’t surprised when
+the workflows converge.
 
 ## Prometheus Metrics
 

@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import httpx
+from typer.testing import CliRunner
 
 from scripts import mdwb_cli
 
@@ -12,6 +14,8 @@ API_SETTINGS = mdwb_cli.APISettings(
     api_key=None,
     warning_log_path=Path("ops/warnings.jsonl"),
 )
+
+runner = CliRunner()
 
 
 class FakeResponse:

@@ -25,6 +25,7 @@ class StubResponse:
             text = mdwb_cli.json.dumps(payload)
         self.text = text
         self._payload = payload
+        self.content: bytes | None = None
 
     def json(self):  # noqa: ANN001
         if self._payload is not None:
@@ -76,3 +77,33 @@ def test_jobs_links_handles_not_found(monkeypatch):
     assert result.exit_code != 0
     assert "not found" in result.output.lower()
 
+
+def test_jobs_replay_manifest(monkeypatch, tmp_path: Path):
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(mdwb_cli.json.dumps({"url": "https://example.com"}), encoding="utf-8")
+    response = StubResponse(200, payload={"job_id": "replay-1"})
+    stub = StubClient({"/replay": response})
+    monkeypatch.setattr(mdwb_cli, "_client", lambda settings, **_: stub)
+    monkeypatch.setattr(mdwb_cli, "_resolve_settings", lambda base: _fake_settings())
+
+    result = runner.invoke(mdwb_cli.cli, ["jobs", "replay", str(manifest_path)])
+
+    assert result.exit_code == 0
+    assert "replay-1" in result.output
+
+
+def test_jobs_bundle_writes_file(monkeypatch, tmp_path: Path):
+    response = StubResponse(200, text="", payload=None)
+    response.content = b"bundle-bytes"
+    stub = StubClient({"/jobs/job789/artifact/bundle.tar.zst": response})
+    monkeypatch.setattr(mdwb_cli, "_client", lambda settings: stub)
+    monkeypatch.setattr(mdwb_cli, "_resolve_settings", lambda base: _fake_settings())
+    out_path = tmp_path / "bundle.tar.zst"
+
+    result = runner.invoke(
+        mdwb_cli.cli,
+        ["jobs", "artifacts", "bundle", "job789", "--out", str(out_path)],
+    )
+
+    assert result.exit_code == 0
+    assert out_path.read_bytes() == b"bundle-bytes"

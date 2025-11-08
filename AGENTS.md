@@ -160,3 +160,278 @@ If the instructions above ever appear to conflict, defer to this `AGENTS.md`, th
 - **Weekly latency report**: generate `benchmarks/production/weekly_summary.json` capturing p50/p95 per category and highlight any budget violations.
 - **Regression handling**: if a URL exceeds its latency or diff budget twice in a week, update the relevant Mail thread with links to tiles, manifest, DOM snapshot, and OCR request IDs so others can reproduce; pause shipments touching capture/OCR until it’s green again.
 - **Readiness check**: before handoff, confirm (a) nightly smoke green for 48 hours, (b) weekly summary within budgets, (c) generative E2E tests green, (d) hosted OCR usage <80 %. Mention these in your status update.
+
+
+## Advanced `ast-grep` use (and when to keep `rg`)
+
+**Quick run tips**
+
+* One-off pattern: `ast-grep run -l <lang> -p '<PATTERN>' [--rewrite '<FIX>'] [PATHS]`
+* Single-rule YAML: `ast-grep scan -r path/to/rule.yml [PATHS] -U`
+* Speed combo: `rg -l -t ts 'Promise\.all\(' | xargs ast-grep scan -r rules/no-await-in-promise-all.yml -U`
+
+**When to prefer `rg`:** raw text/regex hunts, giant prefilters, or non-code assets. Use it to shortlist files, then let `ast-grep` make precise matches/rewrites.
+
+---
+
+### 1) Ban `await` inside `Promise.all([...])` (auto-fix)
+
+```yaml
+# rules/no-await-in-promise-all.yml
+id: no-await-in-promise-all
+language: typescript
+rule:
+  pattern: await $A
+  inside:
+    pattern: Promise.all($_)
+    stopBy:
+      not: { any: [{kind: array}, {kind: arguments}] }
+fix: $A
+```
+
+**Works by** matching `await $A` only when the node is inside a `Promise.all(...)` call; `stopBy` prevents the relation from leaking past the call’s array/args boundary. 
+
+---
+
+### 2) Imports without a file extension (flag all)
+
+```yaml
+# rules/find-import-file-without-ext.yml
+id: find-import-file
+language: typescript
+rule:
+  regex: "/[^.]+[^/]$"
+  kind: string_fragment
+  any:
+    - inside: { stopBy: end, kind: import_statement }
+    - inside:
+        stopBy: end
+        kind: call_expression
+        has: { field: function, regex: "^import$" }
+```
+
+**Works by** finding string literal fragments used in import specifiers where the module path lacks an extension, covering both static and dynamic imports.
+
+---
+
+### 3) Find usages of a specifically imported symbol (code-aware grep)
+
+```yaml
+# rules/find-import-usage.yml
+id: find-import-usage
+language: typescript
+rule:
+  kind: identifier
+  pattern: $MOD
+  inside:
+    stopBy: end
+    kind: program
+    has:
+      kind: import_statement
+      has:
+        stopBy: end
+        kind: import_specifier
+        pattern: $MOD
+```
+
+**Works by** ensuring a `$MOD` identifier use appears in a file that **also** imports the same `$MOD`, via nested `inside/has` relations to tie usage to its import.
+
+---
+
+### 4) Prefer `||=` over `a = a || b` (tight codemod)
+
+```bash
+ast-grep -p '$A = $A || $B' -r '$A ||= $B' -l ts
+```
+
+**Works by** back‑referencing the same `$A` on both sides, guaranteeing you only rewrite the self‑fallback form.
+
+---
+
+### 5) Disallow `console` except `console.error` inside `catch` (policy)
+
+```yaml
+# rules/no-console-except-error.yml
+id: no-console-except-error
+language: typescript
+rule:
+  any:
+    - pattern: console.error($$$)
+      not: { inside: { kind: catch_clause, stopBy: end } }
+    - pattern: console.$METHOD($$$)
+constraints:
+  METHOD: { regex: "log|debug|warn" }
+```
+
+**Works by** allowing `console.error` only when it’s **inside** a `catch`, and blocking `log/debug/warn` anywhere, using `any` + `constraints`.
+
+---
+
+### 6) React/TSX: replace `cond && <JSX/>` with ternary (auto-fix)
+
+```yaml
+# rules/no-and-short-circuit-in-jsx.yml
+id: no-and-short-circuit-in-jsx
+language: tsx
+rule:
+  kind: jsx_expression
+  has: { pattern: $A && $B }
+  not: { inside: { kind: jsx_attribute } }
+fix: "{$A ? $B : null}"
+```
+
+**Works by** targeting `&&` expressions **only** in JSX expression blocks (not attributes) and rewriting to a safe ternary to avoid rendering `0`.
+
+---
+
+### 7) TSX/SVG: hyphenated attributes → camelCase (auto-fix with transform)
+
+```yaml
+# rules/svg-attr-to-camel.yml
+id: rewrite-svg-attribute
+language: tsx
+rule:
+  pattern: $PROP
+  regex: ([a-z]+)-([a-z])
+  kind: property_identifier
+  inside: { kind: jsx_attribute }
+transform:
+  NEW_PROP: { convert: { source: $PROP, toCase: camelCase } }
+fix: $NEW_PROP
+```
+
+**Works by** capturing the kebab‑cased prop name and using `convert/toCase: camelCase` to synthesize the replacement identifier. 
+
+---
+
+### 8) HTML/Vue templates: `:visible` → `:open` on specific tags (scoped rewrite)
+
+```yaml
+# rules/antd-visible-to-open.yml
+id: upgrade-ant-design-vue
+language: html
+utils:
+  inside-tag:
+    inside:
+      kind: element
+      stopBy: { kind: element }
+      has:
+        stopBy: { kind: tag_name }
+        kind: tag_name
+        pattern: $TAG_NAME
+rule:
+  kind: attribute_name
+  regex: :visible
+  matches: inside-tag
+constraints:
+  TAG_NAME: { regex: a-modal|a-tooltip }
+fix: :open
+```
+
+**Works by** discovering the **enclosing element** with a util rule, capturing its tag name into `$TAG_NAME`, then constraining the rewrite to modal/tooltip components only.
+
+---
+
+### 9) C/C++: fix format‑string vulnerabilities (auto‑insert `"%s"`)
+
+```yaml
+# rules/cpp-fmt-string.yml
+id: fix-format-security-error
+language: cpp
+rule: { pattern: $PRINTF($S, $VAR) }
+constraints:
+  PRINTF: { regex: "^sprintf|fprintf$" }
+  VAR:
+    not:
+      any:
+        - { kind: string_literal }
+        - { kind: concatenated_string }
+fix: $PRINTF($S, "%s", $VAR)
+```
+
+**Works by** matching `sprintf/fprintf` calls where the second arg isn’t already a literal, then inserting an explicit `"%s"` format. 
+
+---
+
+### 10) YAML configs: flag host/port and emit a custom message (linting)
+
+```yaml
+# rules/detect-host-port.yml
+id: detect-host-port
+language: yaml
+message: You are using $HOST on Port $PORT, please change it to 8000
+severity: error
+rule:
+  any:
+    - pattern: "port: $PORT"
+    - pattern: "host: $HOST"
+```
+
+**Works by** matching YAML key/value pairs and surfacing a structured error with captured values in the message.
+
+---
+
+### 11) Multi-step codemod (XState v4 → v5) with `utils` and `transform`
+
+```yaml
+# rules/xstate-migration.yml
+id: migrate-import-name
+utils:
+  FROM_XS: { kind: import_statement, has: { kind: string, regex: xstate } }
+  XS_EXPORT:
+    kind: identifier
+    inside: { has: { matches: FROM_XS }, stopBy: end }
+rule: { regex: ^Machine|interpret$, pattern: $IMPT, matches: XS_EXPORT }
+transform:
+  STEP1: { replace: { by: create$1, replace: (Machine), source: $IMPT } }
+  FINAL: { replace: { by: createActor, replace: interpret, source: $STEP1 } }
+fix: $FINAL
+---
+id: migrate-to-provide
+rule: { pattern: $MACHINE.withConfig }
+fix: $MACHINE.provide
+---
+id: migrate-to-actors
+rule:
+  kind: property_identifier
+  regex: ^services$
+  inside: { pattern: $M.withConfig($$$ARGS), stopBy: end }
+fix: actors
+```
+
+**Works by** constraining import‑bound identifiers with `utils`, then composing staged `transform` replacements; separate rules finish the API rename and options shape update.
+
+---
+
+### 12) When one‑node rewrites aren’t enough: use **Rewriters**
+
+If you need to **explode a single import into many**, apply a rewriter over captured descendants and join the generated edits:
+
+```yaml
+# rules/barrel-to-single.yml
+id: barrel-to-single
+language: javascript
+rule: { pattern: "import {$$$IDENTS} from './module'" }
+rewriters:
+- id: rewrite-identifier
+  rule: { kind: identifier, pattern: $IDENT }
+  transform: { LIB: { convert: { source: $IDENT, toCase: lowerCase } } }
+  fix: "import $IDENT from './module/$LIB'"
+transform:
+  IMPORTS:
+    rewrite:
+      rewriters: [rewrite-identifier]
+      source: $$$IDENTS
+      joinBy: "\n"
+fix: $IMPORTS
+```
+
+**Works by** applying a rewriter to each captured identifier in `$$$IDENTS`, producing multiple import lines and joining them into a single replacement.
+
+---
+
+### Practical heuristics (structure vs. text)
+
+* **Structure-sensitive changes** or **bulk refactors** → `ast-grep` rules (often YAML) with `inside/has/not`, `constraints`, `transform`, and sometimes `rewriters`.
+* **Fast reconnaissance** or **non‑code assets** → `ripgrep`; pipe file lists into `ast-grep` when precision or rewriting begins.
+

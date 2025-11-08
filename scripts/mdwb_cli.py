@@ -31,8 +31,6 @@ demo_cli = typer.Typer(help="Demo commands hitting the built-in /jobs/demo endpo
 cli.add_typer(demo_cli, name="demo")
 jobs_cli = typer.Typer(help="Job utilities (events/watch/replay).")
 cli.add_typer(jobs_cli, name="jobs")
-jobs_replay_cli = typer.Typer(help="Replay helpers (manifest, future inputs).")
-jobs_cli.add_typer(jobs_replay_cli, name="replay")
 jobs_artifacts_cli = typer.Typer(help="Download manifests/markdown/links for jobs.")
 jobs_cli.add_typer(jobs_artifacts_cli, name="artifacts")
 jobs_webhooks_cli = typer.Typer(help="Manage job webhooks.")
@@ -214,6 +212,31 @@ def _watch_job_events_pretty(
             console.print_json(data=entry)
 
 
+def _watch_events_with_fallback(
+    job_id: str,
+    settings: APISettings,
+    *,
+    cursor: str | None,
+    follow: bool,
+    interval: float,
+    raw: bool,
+) -> None:
+    """Stream `/jobs/{id}/events`, falling back to SSE when unavailable."""
+
+    try:
+        _watch_job_events_pretty(
+            job_id,
+            settings,
+            cursor=cursor,
+            follow=follow,
+            interval=interval,
+            raw=raw,
+        )
+    except httpx.HTTPError as exc:
+        console.print(f"[yellow]Events feed unavailable ({exc}); falling back to SSE stream.[/]")
+        _stream_job(job_id, settings, raw=raw)
+
+
 def _render_snapshot(snapshot: dict[str, Any]) -> None:
     state = snapshot.get("state")
     if state:
@@ -301,20 +324,14 @@ def fetch(
 
     if watch and job_id:
         console.rule(f"Streaming {job_id}")
-        try:
-            _watch_job_events_pretty(
-                job_id,
-                settings,
-                cursor=None,
-                follow=True,
-                interval=2.0,
-                raw=raw,
-            )
-        except httpx.HTTPError as exc:
-            console.print(
-                f"[yellow]Events feed unavailable ({exc}); falling back to SSE stream.[/]"
-            )
-            _stream_job(job_id, settings, raw=raw)
+        _watch_events_with_fallback(
+            job_id,
+            settings,
+            cursor=None,
+            follow=True,
+            interval=2.0,
+            raw=raw,
+        )
 
 
 @cli.command()
@@ -373,18 +390,14 @@ def watch(
     """Stream `/jobs/{id}/events` with optional fallback to SSE."""
 
     settings = _resolve_settings(api_base)
-    try:
-        _watch_job_events_pretty(
-            job_id,
-            settings,
-            cursor=since,
-            follow=follow,
-            interval=interval,
-            raw=raw,
-        )
-    except httpx.HTTPError as exc:
-        console.print(f"[yellow]Events feed unavailable ({exc}); falling back to SSE stream.[/]")
-        _stream_job(job_id, settings, raw=raw)
+    _watch_events_with_fallback(
+        job_id,
+        settings,
+        cursor=since,
+        follow=follow,
+        interval=interval,
+        raw=raw,
+    )
 
 
 @demo_cli.command("snapshot")
@@ -974,8 +987,26 @@ def jobs_links(
     _write_text_output(text, out, description="links")
 
 
-@jobs_replay_cli.command("manifest")
-def jobs_replay_manifest(
+@jobs_artifacts_cli.command("bundle")
+def jobs_bundle(
+    job_id: str = typer.Argument(..., help="Job identifier"),
+    api_base: Optional[str] = typer.Option(None, help="Override API base URL"),
+    out: Optional[str] = typer.Option("bundle.tar.zst", "--out", help="Write tar bundle to this path"),
+) -> None:
+    settings = _resolve_settings(api_base)
+    client = _client(settings)
+    response = client.get(f"/jobs/{job_id}/artifact/bundle.tar.zst")
+    if response.status_code == 404:
+        console.print(f"[red]Job {job_id} or bundle not found.[/]")
+        raise typer.Exit(code=1)
+    response.raise_for_status()
+    if not out:
+        out = f"{job_id}-bundle.tar.zst"
+    _write_binary_output(response.content, out, description="bundle")
+
+
+@jobs_cli.command("replay")
+def jobs_replay(
     manifest_path: Path = typer.Argument(
         ...,
         exists=True,
