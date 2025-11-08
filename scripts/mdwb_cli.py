@@ -149,14 +149,23 @@ class ResumeManager:
             return len(done_hashes), None
         total = sum(len(entries) for entries in mapping.values())
         done = sum(len(mapping.get(h, ())) for h in done_hashes if h in mapping)
+        missing = len([h for h in done_hashes if h not in mapping])
+        done += missing
         return done, total
 
     def list_entries(self, limit: Optional[int] = None) -> list[str]:
         mapping = self._load_index()
+        done_hashes = self._done_hashes()
         if mapping:
-            all_entries: list[str] = sorted({entry for entries in mapping.values() for entry in entries})
+            completed: list[str] = []
+            for group_hash, entries in mapping.items():
+                if group_hash not in done_hashes:
+                    continue
+                completed.extend(sorted(entries))
+            placeholders = [f"hash:{value}" for value in sorted(h for h in done_hashes if h not in mapping)]
+            all_entries = completed + placeholders
         else:
-            all_entries = [f"hash:{value}" for value in sorted(self._done_hashes())]
+            all_entries = [f"hash:{value}" for value in sorted(done_hashes)]
         if limit is not None and limit > 0:
             return all_entries[:limit]
         return all_entries
@@ -243,6 +252,49 @@ class ResumeManager:
         temp_path.write_bytes(compressed)
         temp_path.replace(self.index_path)
         self._index_cache = mapping
+
+
+class _ProgressMeter:
+    def __init__(self) -> None:
+        self._start = time.monotonic()
+        self._last_print: tuple[int | None, int | None] | None = None
+
+    def describe(self, done: int | None, total: int | None) -> str | None:
+        if done is None and total is None:
+            return None
+        key = (done, total)
+        if self._last_print == key:
+            return None
+        self._last_print = key
+        parts: list[str] = []
+        if total and total > 0 and done is not None:
+            pct = min(max(done / total * 100, 0.0), 100.0)
+            parts.append(f"{pct:5.1f}%")
+        rate = None
+        elapsed = max(time.monotonic() - self._start, 1e-6)
+        if done is not None and done > 0:
+            rate = done / elapsed
+        if rate is not None and done is not None and total is not None and total > done:
+            remaining = (total - done) / rate
+            parts.append(f"ETA {_format_duration_short(remaining)}")
+        elif rate is not None and total is not None and done is not None and total == done:
+            parts.append("ETA 0s")
+        if not parts:
+            return None
+        return "(" + ", ".join(parts) + ")"
+
+
+def _format_duration_short(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
 
 
 @resume_cli.command("status")
@@ -508,6 +560,7 @@ def _stream_job(
     raw: bool,
     hooks: Optional[dict[str, list[str]]] = None,
     on_terminal: Optional[Callable[[str, dict[str, Any] | None], None]] = None,
+    progress_meter: _ProgressMeter | None = None,
 ) -> None:
     with _client_ctx(settings, timeout=None) as client:
         with client.stream("GET", f"/jobs/{job_id}/stream") as response:
@@ -516,7 +569,14 @@ def _stream_job(
                 if raw:
                     console.print(f"{event}\t{payload}")
                 else:
-                    _log_event(event, payload)
+                    formatted = payload
+                    if event == "progress" and progress_meter:
+                        data = _parse_json_payload(payload)
+                        if isinstance(data, dict):
+                            text = _format_progress_text(data, meter=progress_meter)
+                            if text:
+                                formatted = text
+                    _log_event(event, formatted)
                 if hooks:
                     entry_payload: Mapping[str, Any]
                     try:
@@ -578,6 +638,7 @@ def _watch_job_events_pretty(
     interval: float,
     raw: bool,
     hooks: Optional[dict[str, list[str]]] = None,
+    progress_meter: _ProgressMeter | None = None,
     on_terminal: Optional[Callable[[str, dict[str, Any] | None], None]] = None,
 ) -> None:
     terminal_states = {"DONE", "FAILED"}
@@ -593,7 +654,7 @@ def _watch_job_events_pretty(
         _trigger_event_hooks(entry, hooks)
         snapshot = entry.get("snapshot")
         if isinstance(snapshot, dict):
-            _render_snapshot(snapshot)
+            _render_snapshot(snapshot, meter=progress_meter)
             state = snapshot.get("state")
             if follow and isinstance(state, str) and state.upper() in terminal_states:
                 if on_terminal:
@@ -613,6 +674,7 @@ def _watch_events_with_fallback(
     raw: bool,
     hooks: Optional[dict[str, list[str]]] = None,
     on_terminal: Optional[Callable[[str, dict[str, Any] | None], None]] = None,
+    progress_meter: _ProgressMeter | None = None,
 ) -> None:
     """Stream `/jobs/{id}/events`, falling back to SSE when unavailable."""
 
@@ -625,22 +687,30 @@ def _watch_events_with_fallback(
             interval=interval,
             raw=raw,
             hooks=hooks,
+            progress_meter=progress_meter,
             on_terminal=on_terminal,
         )
     except httpx.HTTPError as exc:
         console.print(f"[yellow]Events feed unavailable ({exc}); falling back to SSE stream.[/]")
-        _stream_job(job_id, settings, raw=raw, hooks=hooks, on_terminal=on_terminal)
+        _stream_job(
+            job_id,
+            settings,
+            raw=raw,
+            hooks=hooks,
+            on_terminal=on_terminal,
+            progress_meter=progress_meter,
+        )
 
 
-def _render_snapshot(snapshot: dict[str, Any]) -> None:
+def _render_snapshot(snapshot: dict[str, Any], *, meter: _ProgressMeter | None = None) -> None:
     state = snapshot.get("state")
     if state:
         _log_event("state", str(state))
     progress = snapshot.get("progress")
     if isinstance(progress, dict):
-        done = progress.get("done", 0)
-        total = progress.get("total", 0)
-        _log_event("progress", f"{done} / {total} tiles")
+        text = _format_progress_text(progress, meter=meter)
+        if text:
+            _log_event("progress", text)
     manifest_path = snapshot.get("manifest_path")
     if manifest_path:
         _log_event("log", f"manifest: {manifest_path}")
@@ -678,6 +748,7 @@ def fetch(
     watch: bool = typer.Option(False, "--watch/--no-watch", help="Stream job progress after submission"),
     raw: bool = typer.Option(False, "--raw", help="When watching, print raw NDJSON lines"),
     http2: bool = typer.Option(True, "--http2/--no-http2"),
+    progress_eta: bool = typer.Option(True, "--progress/--no-progress", help="Show percent/ETA while streaming events."),
     resume: bool = typer.Option(
         False,
         "--resume/--no-resume",
@@ -778,6 +849,8 @@ def fetch(
             resume_manager.mark_complete(url)
             resume_marked = True
 
+    progress_meter = _ProgressMeter() if progress_eta else None
+
     if watch and job_id:
         console.rule(f"Streaming {job_id}")
         _watch_events_with_fallback(
@@ -789,6 +862,7 @@ def fetch(
             raw=raw,
             hooks=hook_map or None,
             on_terminal=_handle_terminal if resume_manager else None,
+            progress_meter=progress_meter,
         )
 
 
@@ -897,6 +971,7 @@ def watch(
     follow: bool = typer.Option(True, "--follow/--once", help="Keep polling for new events instead of exiting."),
     interval: float = typer.Option(2.0, "--interval", help="Polling interval in seconds when following."),
     raw: bool = typer.Option(False, "--raw", help="Print raw NDJSON events instead of formatted output."),
+    progress_eta: bool = typer.Option(True, "--progress/--no-progress", help="Show percent/ETA while streaming events."),
     on_event: Optional[list[str]] = typer.Option(
         None,
         "--on",
@@ -915,6 +990,7 @@ def watch(
         interval=interval,
         raw=raw,
         hooks=hook_map or None,
+        progress_meter=_ProgressMeter() if progress_eta else None,
     )
 
 
@@ -1225,18 +1301,26 @@ def _format_validation_summary(values: Any) -> str:
     return "; ".join(str(entry) for entry in values)
 
 
-def _format_progress_text(progress: Any) -> str:
+def _format_progress_text(progress: Any, *, meter: _ProgressMeter | None = None) -> str:
     if not isinstance(progress, dict):
         return "-"
     done = progress.get("done")
     total = progress.get("total")
     if done is None and total is None:
         return "-"
+    base: str
     if done is None:
-        return f"? / {total}"
-    if total is None:
-        return f"{done} / ?"
-    return f"{done} / {total}"
+        base = f"? / {total}"
+    elif total is None:
+        base = f"{done} / ?"
+    else:
+        base = f"{done} / {total}"
+    extra = None
+    if meter is not None:
+        extra = meter.describe(done if isinstance(done, int) else None, total if isinstance(total, int) else None)
+    if extra:
+        return f"{base} {extra}"
+    return base
 
 
 def _print_diag_report(

@@ -43,6 +43,13 @@ def _write_resume_state(root: Path, group_hash: str, entries: list[str]) -> None
     index_path.write_bytes(compressed)
 
 
+def _write_resume_index(root: Path, rows: list[tuple[str, list[str]]]) -> None:
+    index_path = root / "work_index_list.csv.zst"
+    payload = "".join(",".join([group_hash, *entries]) + "\n" for group_hash, entries in rows)
+    compressed = zstd.ZstdCompressor().compress(payload.encode("utf-8"))
+    index_path.write_bytes(compressed)
+
+
 def test_fetch_with_webhook_urls(monkeypatch):
     calls: list[tuple[str, dict]] = []
 
@@ -226,3 +233,25 @@ def test_fetch_resume_marks_completion(monkeypatch, tmp_path):
     group_hash = mdwb_cli._resume_hash("https://resume.example")
     flag = tmp_path / "done_flags" / f"done_{group_hash}.flag"
     assert flag.exists()
+
+
+def test_resume_manager_list_entries_filters_completed(tmp_path):
+    done_url = "https://done.example/a"
+    pending_url = "https://pending.example/b"
+    done_hash = mdwb_cli._resume_hash(done_url)
+    pending_hash = mdwb_cli._resume_hash(pending_url)
+    _write_resume_index(
+        tmp_path,
+        [
+            (done_hash, [done_url]),
+            (pending_hash, [pending_url]),
+        ],
+    )
+    done_dir = tmp_path / "done_flags"
+    done_dir.mkdir(parents=True, exist_ok=True)
+    (done_dir / f"done_{done_hash}.flag").write_text("", encoding="utf-8")
+
+    manager = mdwb_cli.ResumeManager(tmp_path)
+    entries = manager.list_entries()
+
+    assert entries == [done_url]

@@ -290,7 +290,8 @@ _2025-11-08 — PurpleHill (follow-up) fixed `_client_ctx` so explicit `timeout=
 _2025-11-08 — PinkCat (bd-t46) refreshed README + docs/ops to document the new diag/watch hook/artifact/replay/embeddings commands so ops/onboarding have a single CLI reference._
 _2025-11-08 — PinkCat (bd-mux) added `SKIP_LIBVIPS_CHECK=1` to `scripts/run_checks.sh` so targeted CLI/unit runs can bypass the libvips preflight on hosts without the system dependency while keeping the default fail-fast behavior._
 _2025-11-08 — PinkLake (bd-4dq) added `mdwb fetch --resume`, which reads `work_index_list.csv.zst` + `done_flags/` (configurable via `--resume-root/--resume-index/--resume-done-dir`) before contacting `/jobs`; completed URLs are skipped with a progress summary, README/docs now cover the flags, and `tests/test_mdwb_cli_fetch.py` gained coverage for skip/submit/marking flows. The CLI auto-enables `--watch` for resume runs so successful jobs write the corresponding `done_*.flag` + index entry, keeping future retries deterministic._
-_2025-11-08 — PinkLake (bd-4dq follow-up) added `mdwb resume status` so agents can inspect resume roots (counts, sample entries, JSON output) without spelunking `done_flags/`; tests now cover both full index and hash-only states._
+_2025-11-08 — PinkLake (bd-4dq follow-up) added `mdwb resume status` so agents can inspect resume roots (counts, sample entries, JSON output) without spelunking `done_flags/`; tests now cover both full index and hash-only states, and the CLI watch/fetch flows now show tile percent + ETA (toggle via `--no-progress`)._
+_2025-11-08 — RedSnow (bd-oez) fixed `mdwb resume status` to list only completed entries (previously showed every backlog entry) and added unit tests covering the filtered output + ResumeManager helpers._
 - SSE: `event:state`, `event:tile`, `event:warning`
 - JSONLines: newline-delimited objects mirroring SSE for CLI `--follow`
 
@@ -482,6 +483,34 @@ _2025-11-08 — RedSnow (bd-ug0.1) aligning the mdwb_cli test stubs with the `_c
 - **Perf:** p50/p95 timings, retries ≤2 per tile, memory footprint below threshold on 10k px pages.
 - **New guards:** CfT pinning test, viewport sweep regression (full-page omission repro), table split fuzzer, scroll stabilization harness.
 - **Generative E2E guardrail:** every major feature must have at least one GenIA-E2ETest (or comparable LLM-generated) scenario that exercises scrolling, tiling, OCR, stitching, and manifest logging end-to-end. Keep fixtures for these tests under `tests/test_e2e_generated.py` and fail CI when the Markdown diff exceeds 2%.
+- **Rich-logged integration suites:** add `tests/test_e2e_cli.py` scenarios that exercise CLI + agent workflows with `rich` panels/tables/syntax highlighting so each step logs inputs, invoked helpers, and outputs. These tests should: (a) print the URL/resume root/webhook targets via `rich.Panel`, (b) describe the feature under test (“mdwb fetch --resume”, “scripts/agents/summarize_article”, etc.) with the internal functions being exercised, (c) capture outputs/results (manifest paths, warning stats, webhook payloads) in tables, and (d) emit a final summary panel with timings, exit codes, and artifact directories. Hook these suites into `scripts/run_checks.sh` (behind `MDWB_CHECK_METRICS` or a similar env toggle) so ops can chase regressions with the same annotated breadcrumbs they’d expect in production.
+
+### 14.1 Pytest Coverage Checklist
+
+All new or modified subsystems must be accompanied by targeted pytest modules so regressions surface quickly. When in doubt, follow this baseline matrix:
+
+| Area | Example Tests | Notes |
+| --- | --- | --- |
+| Capture helpers | `tests/test_capture_warnings.py`, `tests/test_tiling.py` | Mock pyvips/Playwright as needed; validate warnings, seam ratios, checksum enforcement. |
+| Store & manifests | `tests/test_store_manifest.py`, `tests/test_manifest_contract.py` | Ensure RunRecord metadata (timings, sweep stats, validation counts) persists and matches schema contracts. |
+| CLI commands | `tests/test_mdwb_cli_*.py` | Use `CliRunner` + stub clients to cover every Typer command (artifacts, replay, resume, warnings, resume status, ocr metrics). Include JSON output assertions when supported. |
+| Agent helpers | `tests/test_agent_scripts.py` | Exercise the shared capture/resume utilities powering `scripts/agents/…`. |
+| Prometheus tooling | `tests/test_check_metrics.py` | Verify structured JSON output and exporter overrides for the metrics health check. |
+| Ops scripts | `tests/test_show_latest_smoke.py`, `tests/test_update_smoke_pointers.py` | Ensure smoke manifests/summaries render overlap/validation breadcrumbs and pointer files are validated. |
+
+When adding code to these areas:
+1. Create or extend the matching pytest module (mirroring the filename pattern above).
+2. Add lightweight fixtures/stubs instead of hitting real services (use `CliRunner`, `httpx.MockTransport`, or local file roots).
+3. Update `scripts/run_checks.sh` to include any new test modules if they exercise core tooling (CLI, ops scripts, agent helpers).
+4. Run `uv run pytest ...` locally before requesting review, and capture the command/output in your Agent Mail bead summary.
+
+#### Bead Breakdown (Pytest Coverage Upgrades)
+- **bd-ptest-core** — Audit existing pytest modules against the checklist, file gaps per area (capture/store/CLI/agents/ops), and prepare a punch list for follow-up beads.
+- **bd-ptest-cli** — Add or extend CLI-focused pytest modules (mdwb_cli commands, resume helpers, warning log JSON). Ensure `scripts/run_checks.sh` references the added tests.
+- **bd-ptest-store** — Cover persistence/datastructure changes (RunRecord, manifest schema) via `tests/test_store_manifest.py` + contract tests; include fixture helpers for future contributors.
+- **bd-ptest-ops** — Expand ops script coverage (show_latest_smoke, update_smoke_pointers, agent starter scripts) and document how to run them locally (README/docs/ops cross-links).
+- **bd-ptest-prom** — Keep `tests/test_check_metrics.py` aligned with telemetry changes (flags, JSON output, exporter overrides) and tie the bead to PLAN §20 telemetry requirements.
+- **bd-ptest-reporting** — Add a CI summary step (or ensure Agent Mail templates) that links to pytest logs / coverage deltas whenever run_checks fails, so operators know which area regressed.
 
 ---
 

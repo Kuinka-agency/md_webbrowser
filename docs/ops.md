@@ -207,6 +207,7 @@ warning spikes, job failures, or SSE stalls exceed their budgets.
   to control JSON formatting when writing to disk.
 - `uv run python scripts/mdwb_cli.py jobs show <job-id>` now includes "Sweep" and "Validation" rows summarizing overlap ratios, shrink/retry counts, and any tile-integrity failures right in the table—use this before diving into manifests when triaging seams.
 - `uv run python scripts/mdwb_cli.py warnings tail --json` streams warning log entries with derived fields like `validation_failure_count`, `overlap_match_ratio`, and `sweep_summary`, making it easier to feed dashboards without parsing the text table.
+
 - `uv run python scripts/mdwb_cli.py jobs bundle <job-id> --out bundle.tar.zst`
   fetches the tarball (`bundle.tar.zst`) that Store emits alongside the tiles/markdown/links/manifest, keeping
   incidents and reruns reproducible without hand-written curl commands.

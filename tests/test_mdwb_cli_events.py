@@ -145,6 +145,7 @@ def test_watch_job_events_pretty_renders_snapshot(monkeypatch):
             follow=True,
             interval=0.1,
             raw=False,
+            progress_meter=None,
         )
     output = capture.get()
     assert "BROWSER_STARTING" in output
@@ -162,15 +163,32 @@ def test_log_event_formats_blocklist_and_sweep():
     assert "Tile checksum mismatch" in output
 
 
+def test_format_progress_text_with_meter(monkeypatch):
+    calls = iter([0.0, 5.0])
+
+    def fake_monotonic():
+        try:
+            return next(calls)
+        except StopIteration:
+            return 5.0
+
+    monkeypatch.setattr(mdwb_cli.time, "monotonic", fake_monotonic)
+    meter = mdwb_cli._ProgressMeter()
+    text = mdwb_cli._format_progress_text({"done": 5, "total": 10}, meter=meter)
+    assert "50.0%" in text
+    assert "ETA" in text
+
+
 def test_watch_events_with_fallback_streams_via_sse(monkeypatch):
     def fake_watch(*args, **kwargs):
         raise httpx.RequestError("boom", request=httpx.Request("GET", "http://test"))
 
     calls: dict[str, object] = {}
 
-    def fake_stream(job_id: str, settings: mdwb_cli.APISettings, raw: bool, hooks=None, **_):  # noqa: ANN001
+    def fake_stream(job_id: str, settings: mdwb_cli.APISettings, raw: bool, hooks=None, progress_meter=None, **_):  # noqa: ANN001
         calls["job_id"] = job_id
         calls["raw"] = raw
+        calls["progress_meter"] = progress_meter
 
     monkeypatch.setattr(mdwb_cli, "_watch_job_events_pretty", fake_watch)
     monkeypatch.setattr(mdwb_cli, "_stream_job", fake_stream)
@@ -183,26 +201,30 @@ def test_watch_events_with_fallback_streams_via_sse(monkeypatch):
             follow=True,
             interval=1.0,
             raw=True,
+            progress_meter=None,
         )
 
     output = capture.get()
     assert "falling back to SSE stream" in output
-    assert calls == {"job_id": "job123", "raw": True}
+    assert calls == {"job_id": "job123", "raw": True, "progress_meter": None}
 
 
 def test_watch_command_invokes_helper(monkeypatch):
     invoked: list[tuple] = []
     monkeypatch.setattr(mdwb_cli, "_resolve_settings", lambda api_base: API_SETTINGS)
 
-    def fake_helper(job_id, settings, cursor, follow, interval, raw, hooks):  # noqa: ANN001
-        invoked.append((job_id, cursor, follow, interval, raw, hooks))
+    def fake_helper(job_id, settings, cursor, follow, interval, raw, hooks, on_terminal=None, progress_meter=None, **_):  # noqa: ANN001
+        invoked.append((job_id, cursor, follow, interval, raw, hooks, progress_meter))
 
     monkeypatch.setattr(mdwb_cli, "_watch_events_with_fallback", fake_helper)
 
     result = runner.invoke(mdwb_cli.cli, ["watch", "job123", "--interval", "0.5", "--raw", "--on", "snapshot=echo hi"])
 
     assert result.exit_code == 0
-    assert invoked == [("job123", None, True, 0.5, True, {"snapshot": ["echo hi"]})]
+    assert len(invoked) == 1
+    entry = invoked[0]
+    assert entry[:6] == ("job123", None, True, 0.5, True, {"snapshot": ["echo hi"]})
+    assert isinstance(entry[6], mdwb_cli._ProgressMeter)
 
 
 def test_parse_event_hooks_valid():
