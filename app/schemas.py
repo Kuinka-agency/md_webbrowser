@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+import re
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -14,12 +16,40 @@ class JobCreateRequest(BaseModel):
     """Payload clients submit to kick off a capture job."""
 
     url: str = Field(description="Target URL to capture")
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("URL cannot be empty")
+
+        # Basic URL format validation
+        parsed = urlparse(value.strip())
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError("URL must have a valid scheme and domain")
+
+        if parsed.scheme.lower() not in ("http", "https"):
+            raise ValueError("URL scheme must be http or https")
+
+        return value.strip()
     profile_id: str | None = Field(default=None, description="Browser profile identifier")
-    viewport_width: int | None = Field(default=None, ge=1, description="Override viewport width")
-    viewport_height: int | None = Field(default=None, ge=1, description="Override viewport height")
-    device_scale_factor: int | None = Field(default=None, ge=1, description="Override device scale factor")
+    viewport_width: int | None = Field(default=None, ge=1, le=32767, description="Override viewport width")
+    viewport_height: int | None = Field(default=None, ge=1, le=32767, description="Override viewport height")
+    device_scale_factor: int | None = Field(default=None, ge=1, le=10, description="Override device scale factor")
     color_scheme: str | None = Field(default=None, description="Override color scheme (light|dark)")
-    long_side_px: int | None = Field(default=None, ge=1, description="Override tile longest side policy")
+
+    @field_validator("color_scheme")
+    @classmethod
+    def _validate_color_scheme(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+
+        value = value.strip().lower()
+        if value not in ("light", "dark"):
+            raise ValueError("color_scheme must be 'light' or 'dark'")
+
+        return value
+    long_side_px: int | None = Field(default=None, ge=1, le=16384, description="Override tile longest side policy")
     reuse_cache: bool = Field(default=True, description="Reuse cached captures when an identical configuration exists")
 
 
@@ -262,13 +292,6 @@ class EmbeddingSearchRequest(BaseModel):
     vector: list[float] = Field(description="Normalized embedding vector", min_length=EMBEDDING_DIM, max_length=EMBEDDING_DIM)
     top_k: int = Field(default=5, ge=1, le=50)
 
-    @field_validator("vector")
-    @classmethod
-    def _validate_vector(cls, value: list[float]) -> list[float]:
-        if len(value) != EMBEDDING_DIM:
-            msg = f"Expected embedding length {EMBEDDING_DIM}, received {len(value)}"
-            raise ValueError(msg)
-        return value
 
 
 class SectionEmbeddingMatch(BaseModel):
@@ -292,6 +315,22 @@ class WebhookRegistrationRequest(BaseModel):
     """Webhook callback registration payload."""
 
     url: str = Field(description="Callback URL to invoke on job events")
+
+    @field_validator("url")
+    @classmethod
+    def _validate_webhook_url(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Webhook URL cannot be empty")
+
+        # Basic URL format validation
+        parsed = urlparse(value.strip())
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError("Webhook URL must have a valid scheme and domain")
+
+        if parsed.scheme.lower() not in ("http", "https"):
+            raise ValueError("Webhook URL scheme must be http or https")
+
+        return value.strip()
     events: list[str] | None = Field(
         default=None,
         description="States that should trigger the webhook (defaults to DONE/FAILED)",
@@ -311,6 +350,25 @@ class WebhookDeleteRequest(BaseModel):
 
     id: int | None = Field(default=None, description="Webhook record ID to delete")
     url: str | None = Field(default=None, description="Webhook URL to delete")
+
+    @field_validator("url")
+    @classmethod
+    def _validate_delete_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+
+        if not value.strip():
+            raise ValueError("Webhook URL cannot be empty if provided")
+
+        # Basic URL format validation
+        parsed = urlparse(value.strip())
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError("Webhook URL must have a valid scheme and domain")
+
+        if parsed.scheme.lower() not in ("http", "https"):
+            raise ValueError("Webhook URL scheme must be http or https")
+
+        return value.strip()
 
     @model_validator(mode="after")
     def _require_selector(self) -> WebhookDeleteRequest:

@@ -1198,17 +1198,13 @@ class ComprehensiveTestRunner:
                                     error_details["details"] = job_data["error_details"]
                                 if "traceback" in job_data:
                                     error_details["traceback"] = job_data["traceback"]
-                                if "warnings" in job_data:
-                                    error_details["warnings"] = job_data["warnings"]
 
-                            # Try to retrieve manifest even on failure for diagnostic info
-                            try:
-                                await self._retrieve_artifacts(client, job_id, test_case)
-                                manifest = test_case.artifacts.get("manifest", {})
-                                if manifest and "error" in manifest:
-                                    error_details["manifest_error"] = manifest["error"]
-                            except Exception:
-                                pass  # Ignore artifact retrieval errors
+                            # Extract warnings from manifest (already stored during monitoring)
+                            manifest = test_case.artifacts.get("manifest", {})
+                            if manifest:
+                                warnings = manifest.get("warnings", [])
+                                if warnings:
+                                    error_details["warnings"] = warnings
 
                             test_case.add_validation(ValidationResult(
                                 passed=False,

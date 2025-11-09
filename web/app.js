@@ -1717,7 +1717,7 @@ function renderDomAssistSummary(summaryEl, tableEl, summary) {
     : (summary.reasons || []).map((reason) => ({ reason, count: '' }));
   const sample = summary.sample || {};
   const sampleRow = sample.dom_text
-    ? `<div class="dom-assist-table__note">Sample (${sample.reason || 'unknown'}): <code>${escapeHtml(sample.dom_text)}</code></div>`
+    ? `<div class="dom-assist-table__note">Sample (${escapeHtml(sample.reason || 'unknown')}): <code>${escapeHtml(sample.dom_text)}</code></div>`
     : '';
   const table = [
     '<table>',

@@ -121,6 +121,24 @@ const elements = {
 // ============================================================================
 
 function init() {
+    // Configure marked.js for security - sanitize HTML in markdown
+    if (typeof marked !== 'undefined') {
+        marked.setOptions({
+            breaks: true,
+            gfm: true
+        });
+        // Use marked's built-in walkTokens to remove potentially dangerous content
+        marked.use({
+            walkTokens(token) {
+                // Remove HTML tokens for XSS protection
+                if (token.type === 'html') {
+                    token.type = 'text';
+                    token.raw = token.text;
+                }
+            }
+        });
+    }
+
     // Get all DOM elements
     elements.backBtn = document.getElementById('back-btn');
     elements.forwardBtn = document.getElementById('forward-btn');
