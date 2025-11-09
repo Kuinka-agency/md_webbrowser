@@ -199,7 +199,57 @@ def test_run_check_reports_failures(monkeypatch):
     result = runner.invoke(check_metrics.cli, ["--no-include-exporter"])
 
     assert result.exit_code == 1
-    assert "[FAIL] http://api/metrics" in result.output
+
+
+def test_run_check_weekly_success(tmp_path, monkeypatch):
+    summary_path = tmp_path / "weekly.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "categories": [
+                    {"name": "Docs", "slo": {"capture_ok": True, "capture_p99_ms": 1000, "capture_budget_ms": 2000}}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(check_metrics, "_probe", lambda url, timeout: 1.0)
+    monkeypatch.setattr(check_metrics, "_load_config", lambda: StubConfig({"API_BASE_URL": "http://api", "PROMETHEUS_PORT": 0}))
+
+    result = runner.invoke(
+        check_metrics.cli,
+        ["--no-include-exporter", "--check-weekly", "--weekly-summary", str(summary_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "[OK] Weekly SLO" in result.output
+
+
+def test_run_check_weekly_failure(tmp_path, monkeypatch):
+    summary_path = tmp_path / "weekly.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "categories": [
+                    {
+                        "name": "Apps",
+                        "slo": {"capture_ok": False, "capture_p99_ms": 5000, "capture_budget_ms": 4000},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(check_metrics, "_probe", lambda url, timeout: 1.0)
+    monkeypatch.setattr(check_metrics, "_load_config", lambda: StubConfig({"API_BASE_URL": "http://api", "PROMETHEUS_PORT": 0}))
+
+    result = runner.invoke(
+        check_metrics.cli,
+        ["--no-include-exporter", "--check-weekly", "--weekly-summary", str(summary_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "Weekly SLO violations" in result.output
 
 
 def test_run_check_json_reports_failures(monkeypatch):

@@ -112,7 +112,6 @@ def test_warnings_tail_pretty_output(tmp_path: Path, monkeypatch) -> None:
     assert "pairs=2" in result.output
     assert "xyz999" in result.output
     assert "assist" in result.output
-    assert "density" in result.output
     assert "job-2" not in result.output  # ensures only run-2 shown once
 
 

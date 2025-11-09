@@ -138,6 +138,7 @@ the workflows converge.
 - Custom metrics include:
   - `mdwb_capture_duration_seconds`, `mdwb_ocr_duration_seconds`, `mdwb_stitch_duration_seconds`
     (histograms for stage timing telemetry, already bucketed for the alert budgets in PLAN §20).
+  - `mdwb_dom_assist_density` (assist density per run) and `mdwb_dom_assist_reason_ratio{reason="…"}` so dashboards can alert when hybrid recovery spikes (alert when density >0.02 or any reason ratio >0.01 for critical categories).
 - `mdwb_capture_warnings_total{code="…"}` and `mdwb_blocklist_hits_total{selector="…"}` so
   noisy overlays or duplicate seams trigger dashboards without parsing manifests.
 - `mdwb_job_completions_total{state="DONE|FAILED"}` to track success rates and
@@ -146,6 +147,9 @@ the workflows converge.
 
 ```
 uv run python scripts/check_metrics.py --timeout 3.0 --json
+
+# Include weekly SLO validation (fails fast when capture/OCR p99 exceed 2×p95 budgets)
+uv run python scripts/check_metrics.py --check-weekly --weekly-summary benchmarks/production/weekly_summary.json
 curl -s http://localhost:8000/metrics | grep mdwb_capture_duration_seconds
 curl -s http://localhost:9000/metrics | head -n 5  # dedicated Prom port
 ```

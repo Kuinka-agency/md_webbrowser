@@ -305,6 +305,7 @@ _2025-11-08 — PinkLake (bd-4dq) added `mdwb fetch --resume`, which reads `work
 _2025-11-08 — PinkLake (bd-4dq follow-up) added `mdwb resume status` so agents can inspect resume roots (counts, sample entries, JSON output) without spelunking `done_flags/`; tests now cover both full index and hash-only states, the CLI watch/fetch flows now show tile percent + ETA (toggle via `--no-progress`), and `--reuse-session` lets fetch/watch reuse one HTTP/2 client so TLS/H2 negotiation isn’t repeated for the streaming phase._
 _2025-11-08 — RedSnow (bd-oez) fixed `mdwb resume status` to list only completed entries (previously showed every backlog entry) and added unit tests covering the filtered output + ResumeManager helpers._
 _2025-11-08 — RedSnow (bd-742) extended `mdwb resume status` with `--pending/--no-pending` plus JSON fields (`completed_entries`, `pending_entries`) so ops tooling can see outstanding URLs in both text and machine-readable form._
+_2025-11-09 — RedMountain (bd-co1 sweep) taught `mdwb resume status` to surface orphan `done_flags` explicitly (JSON fields + CLI warning) and record their copies under `done_flags_review/`, so ops know when manual review is required instead of silently accumulating drift._
 _2025-11-08 — RedSnow (bd-dex) added `--out` support to the new agent starter scripts (summaries + TODOs) so automations can persist results; README/docs stayed in sync and pytest now covers the new flag._
 _2025-11-08 — RedSnow (bd-3aa) added the original `MDWB_RUN_E2E=1` toggle to `scripts/run_checks.sh` so teams could optionally run `tests/test_e2e_cli.py` after the standard pytest subset; this now serves as the lightweight sentinel suite with the new `MDWB_RUN_E2E_RICH` flag driving the FlowLogger scenarios._
 _2025-11-08 — RedSnow (bd-5q6) documented the rich CLI FlowLogger output + toggle usage in README/docs/ops so ops/CI knew how to capture the panels/logs when the suite ran; those docs now point at `MDWB_RUN_E2E_RICH` following the bd-rlp changes._
@@ -644,6 +645,7 @@ Below is a focused, pragmatic list of near-term upgrades. They map to the sectio
 _2025-11-08 — BlueMountain (bd-b9e) opened to land DOM-guided heading leveling, SSIM-gated table merges, richer provenance comments, and the artifact highlight helper promised in this section._
 _2025-11-09 — RedDog (bd-b9e) delivered the seam markers + enriched provenance comments and overlap-aware table header trimming so reviewers can see exactly where tiles merged and why headers were dropped._
 _2025-11-09 — PinkCastle (bd-b9e follow-up) hardened the stitcher: table header trimming now ignores blank/comment prologues, DOM assists merge multi-line hyphen splits while preserving list/blockquote prefixes, overlay candidates are consumed FIFO to keep duplicates aligned, and the warnings CLI table now folds seam/sweep cells so ratios stay readable in Rich output._
+_2025-11-09 — BrownHill (bd-692/bd-md3) threaded seam marker/hash counts through RunRecord, `/jobs/{id}` snapshots, and the `mdwb diag/show` commands so seam telemetry stays available even when the manifest is missing or cached._
 - DOM-guided heading leveling that stores the original line in an HTML comment right above normalized content.
 - Table merge heuristics keyed on repeated header rows + high SSIM; otherwise keep blocks separate.
 - Upgrade provenance comments to `<!-- source: tile_i, y=1234, sha256=..., scale=2.0 -->` and add `/jobs/{id}/artifact/... ?highlight=tile_i,y0,y1` viewer helpers.
@@ -654,7 +656,8 @@ _2025-11-09 — PinkCastle (bd-b9e follow-up) hardened the stitcher: table heade
 - _2025-11-09 — BlueMountain (bd-805) delivered the first hybrid recovery pass: low-confidence heuristics now patch Markdown with DOM text (manifest `dom_assists`, event + CLI diag output, and highlight links for quick inspection)._ 
 - _2025-11-09 — PinkCastle (bd-805 follow-up) added spaced-letter/code-fence guards plus manifest/SSE summaries so CLI/UI panels show DOM-assist counts, reason buckets, and sample text without cracking manifests._
 - _2025-11-09 — PinkCastle (bd-805 follow-up) layered in density/ratio metrics so dom_assist summaries report assists per tile and per reason, keeping manifests/SSE/CLI/warning logs aligned for future dashboards._
-- _2025-11-09 — RedMountain (markdown_web_browser-co1) taught the SSE snapshot builder to fall back to `manifest.dom_assist_summary` (and reuse the shared warning_log helper) so cached/replayed jobs keep emitting DOM-assist events even when the raw `dom_assists` list is absent._
+- _2025-11-09 — PinkCastle (bd-805 follow-up) exported dom_assist density + per-reason ratios to Prometheus (`mdwb_dom_assist_density`, `mdwb_dom_assist_reason_ratio`) so dashboards can alert when hybrid recovery spikes._
+- _2025-11-09 — RedMountain (markdown_web_browser-co1) taught the SSE snapshot builder to fall back to `manifest.dom_assist_summary` (and reuse the shared warning_log helper) so cached/replayed jobs keep emitting DOM-assist events even when the raw `dom_assists` list is absent, and the fallback summarizer now honors `tiles_total` so assist density/ratios stay accurate when we have to recompute._
 - Detect low-confidence OCR regions (symbol rate, low alpha ratio, hyphen density) and patch them with DOM text overlays scoped to the offending block (hero headings, captions, icon fonts).
 
 ### 19.6 Caching, Indexing, Retrieval Quality
@@ -734,6 +737,7 @@ _2025-11-08 — PinkCreek (bd-ug0) designing ops automation: smoke/latency job r
 - **Error budgets:** Dedicate 25% of weekly engineering time to burn-down whenever error budget drops below 90%; prioritize CfT drift, overlay blocklists, or OCR timeout spikes.
 - **Budget attribution:** Manifest fields (`capture_ms`, `tiling_ms`, `ocr_ms`, `stitch_ms`) roll up into BigQuery/duckdb so you can attribute regressions to either Playwright upgrades or model changes.
 _2025-11-08 — BlueMountain (bd-md3) opened to automate these SLO rollups + dashboards so error-budget tracking isn’t manual._
+_2025-11-09 — BrownHill (bd-md3) extended `scripts/run_smoke.py` + `scripts/show_latest_smoke.py` to record capture/total/OCR p95/p99 values, flag SLO breaches per category, and added `scripts/check_metrics.py --check-weekly` so CI/on-call can fail fast when the weekly summary exceeds its 2×p95 budgets._
 
 ### 20.2 Monitoring & Alerting
 - **Metrics:** expose `/metrics` with Prometheus counters and histograms (tiles_processed_total, ocr_retry_total, capture_duration_seconds_bucket). Include labels for model, CfT version, and concurrency tier.

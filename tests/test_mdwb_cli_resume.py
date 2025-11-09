@@ -42,6 +42,8 @@ def test_resume_status_json(tmp_path):
     assert payload["entries"] == ["https://example.com/article"]
     assert payload["completed_entries"] == ["https://example.com/article"]
     assert payload["pending_entries"] == []
+    assert payload["orphan_flag_count"] == 0
+    assert payload["orphan_flag_hashes"] == []
 
 
 def test_resume_status_hash_only(tmp_path):
@@ -69,6 +71,8 @@ def test_resume_status_hash_only(tmp_path):
     assert payload["entries"][0] == f"hash:{hash_value}"
     assert payload["completed_entries"][0] == f"hash:{hash_value}"
     assert payload["pending_entries"] == []
+    assert payload["orphan_flag_count"] == 1
+    assert payload["orphan_flag_hashes"] == [hash_value]
 
 
 def test_resume_status_counts_flags_missing_index(tmp_path):
@@ -97,6 +101,8 @@ def test_resume_status_counts_flags_missing_index(tmp_path):
     assert payload["done"] == 2  # 1 indexed entry + 1 placeholder hash
     assert payload["total"] == 2  # missing hashes now count toward the total
     assert any(entry.startswith("hash:") for entry in payload["entries"])
+    assert payload["orphan_flag_count"] == 1
+    assert payload["orphan_flag_hashes"] == [mdwb_cli._resume_hash(url_b)]
 
 
 def test_resume_status_human_output(tmp_path):
@@ -119,6 +125,29 @@ def test_resume_status_human_output(tmp_path):
     assert result.exit_code == 0
     assert url in result.output
     assert "entries" in result.output.lower()
+
+
+def test_resume_status_reports_orphan_flags(tmp_path):
+    resume_root = tmp_path
+    done_dir = resume_root / "done_flags"
+    done_dir.mkdir()
+    hash_value = mdwb_cli._resume_hash("https://example.com/orphan")
+    (done_dir / f"done_{hash_value}.flag").write_text("ts", encoding="utf-8")
+
+    result = runner.invoke(
+        mdwb_cli.cli,
+        [
+            "resume",
+            "status",
+            "--root",
+            str(resume_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "orphan done flag" in result.output.lower()
+    review_dir = resume_root / "done_flags_review"
+    assert (review_dir / f"{hash_value}.flag").exists()
 
 
 def test_resume_status_pending_list(tmp_path):

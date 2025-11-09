@@ -7,6 +7,7 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
 
 import httpx
 import typer
@@ -57,6 +58,32 @@ def _build_summary(results: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+def _evaluate_weekly_summary(summary_path: Path) -> tuple[bool, dict[str, object]]:
+    if not summary_path.exists():
+        raise FileNotFoundError(f"weekly summary not found: {summary_path}")
+    data = json.loads(summary_path.read_text(encoding="utf-8"))
+    failures: list[str] = []
+    for entry in data.get("categories", []):
+        name = entry.get("name", "?")
+        slo = entry.get("slo") or {}
+        if not isinstance(slo, dict):
+            continue
+        if slo.get("capture_ok") is False:
+            failures.append(
+                f"{name}: capture p99 {slo.get('capture_p99_ms')} > budget {slo.get('capture_budget_ms')}"
+            )
+        if slo.get("ocr_ok") is False:
+            failures.append(
+                f"{name}: OCR p99 {slo.get('ocr_p99_ms')} > budget {slo.get('ocr_budget_ms')}"
+            )
+    status = "ok" if not failures else "error"
+    return status == "ok", {
+        "status": status,
+        "summary_path": str(summary_path),
+        "failures": failures,
+    }
+
+
 @cli.command()
 def run_check(
     api_base: str | None = typer.Option(
@@ -86,6 +113,15 @@ def run_check(
         help="Emit machine-readable output summarizing each target.",
     ),
     timeout: float = typer.Option(5.0, help="HTTP timeout per request (seconds)."),
+    check_weekly: bool = typer.Option(
+        False,
+        "--check-weekly/--skip-weekly",
+        help="Validate weekly SLO summary in addition to metrics probes.",
+    ),
+    weekly_summary: Path = typer.Option(
+        Path("benchmarks/production/weekly_summary.json"),
+        help="Path to weekly_summary.json (used when --check-weekly is enabled).",
+    ),
 ) -> None:
     """Check Prometheus metrics endpoints and exit non-zero when unreachable."""
 
@@ -115,12 +151,41 @@ def run_check(
             if not json_output:
                 typer.echo(message)
 
+    weekly_result: dict[str, object] | None = None
+    if check_weekly:
+        try:
+            ok, weekly_result = _evaluate_weekly_summary(weekly_summary)
+            if ok:
+                if not json_output:
+                    typer.echo(f"[OK] Weekly SLO: {weekly_summary}")
+            else:
+                failures = []
+                if isinstance(weekly_result, Mapping):
+                    raw = weekly_result.get("failures") or []
+                    if isinstance(raw, list):
+                        failures = [str(line) for line in raw]
+                message = "[FAIL] Weekly SLO violations:\n" + "\n".join(f"- {line}" for line in failures or ["unknown"])
+                errors.append(message)
+                if not json_output:
+                    typer.echo(message)
+        except Exception as exc:  # noqa: BLE001
+            message = f"[FAIL] Weekly SLO check failed: {exc}"
+            errors.append(message)
+            if not json_output:
+                typer.echo(message)
+
     if errors:
         if json_output:
-            typer.echo(json.dumps(_build_summary(results), indent=2))
+            payload = _build_summary(results)
+            if weekly_result is not None:
+                payload["weekly"] = weekly_result
+            typer.echo(json.dumps(payload, indent=2))
         raise typer.Exit(code=1)
     if json_output:
-        typer.echo(json.dumps(_build_summary(results), indent=2))
+        payload = _build_summary(results)
+        if weekly_result is not None:
+            payload["weekly"] = weekly_result
+        typer.echo(json.dumps(payload, indent=2))
 
 
 def main() -> None:

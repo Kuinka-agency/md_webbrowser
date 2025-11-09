@@ -17,6 +17,7 @@ All fields are optional but present when the underlying data exists. Manifest sn
 - SSE + UI manifest tab: displays counts, density, ratio table, and sample text.
 - CLI (`mdwb diag`, `mdwb warnings tail`): prints the same summary and reason histogram.
 - Warning logs: persists the summary alongside blocklist/sweep data so historical analysis has the same view.
+- Prometheus metrics: `mdwb_dom_assist_density` (histogram, no labels) captures assists per tile; `mdwb_dom_assist_reason_ratio{reason="..."}` records per-reason ratios using the same buckets. Dashboards can alert on spikes in either metric.
 
 ## Roadmap
 - Prometheus metrics: export `assist_density` and per-reason ratios so dashboards can alert on spikes.

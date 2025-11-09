@@ -345,19 +345,20 @@ def resume_status(
 
     root = root.resolve()
     manager = ResumeManager(root)
+    review_dir = root / "done_flags_review"
     orphan_flags = sorted(
         hash_value
         for hash_value in manager._done_hashes()
         if hash_value not in (manager._load_index() or {})
     )
     if orphan_flags:
-        review_dir = root / "done_flags_review"
         review_dir.mkdir(parents=True, exist_ok=True)
         for hash_value in orphan_flags:
             flag_path = manager.done_dir / f"done_{hash_value}.flag"
             marker = review_dir / f"{hash_value}.flag"
             if flag_path.exists() and not marker.exists():
                 marker.write_text(flag_path.read_text(), encoding="utf-8")
+    orphan_count = len(orphan_flags)
     done, total = manager.status()
     entry_limit = None if limit == 0 else limit
     completed_entries = manager.list_completed_entries(entry_limit)
@@ -371,6 +372,9 @@ def resume_status(
         "entries": completed_entries,
         "completed_entries": completed_entries,
         "pending_entries": pending_entries,
+        "orphan_flag_count": orphan_count,
+        "orphan_flag_hashes": orphan_flags,
+        "orphan_flag_review_dir": str(review_dir),
     }
     if json_output:
         console.print_json(data=data)
@@ -392,6 +396,10 @@ def resume_status(
             console.print(f"- {entry}")
     else:
         console.print("[dim]No resume entries recorded yet.[/]")
+    if orphan_count:
+        console.print(
+            f"[yellow]{orphan_count} orphan done flag(s) copied to {review_dir} for audit.[/]"
+        )
     if pending:
         if pending_entries:
             console.print(
