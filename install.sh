@@ -17,9 +17,9 @@
 set -euo pipefail
 
 # Configuration
-REPO_URL="https://github.com/yourusername/markdown_web_browser.git"
+REPO_URL="${MDWB_REPO_URL:-https://github.com/anthropics/markdown_web_browser.git}"
 DEFAULT_INSTALL_DIR="./markdown_web_browser"
-PYTHON_VERSION="3.11"
+PYTHON_VERSION="${MDWB_PYTHON_VERSION:-3.13}"
 
 # Colors for output
 RED='\033[0;31m'

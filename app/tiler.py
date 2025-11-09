@@ -81,7 +81,7 @@ def _slice_sync(
     # Avoid sequential access which can cause issues with some PNG data
     try:
         image = vips.Image.new_from_buffer(image_bytes, "")
-    except Exception as e:
+    except Exception:
         # Fallback to sequential if needed
         image = vips.Image.new_from_buffer(image_bytes, "", access="sequential")
 

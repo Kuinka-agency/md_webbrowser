@@ -34,9 +34,9 @@ class FallbackOCRClient:
                 raise
 
             LOGGER.warning(f"Primary OCR failed: {e}, falling back to mock responses")
-            return self._generate_mock_responses(tiles)
+            return await self._generate_mock_responses(tiles)
 
-    def _generate_mock_responses(self, tiles: Sequence[OCRRequest]) -> tuple[list[str], dict]:
+    async def _generate_mock_responses(self, tiles: Sequence[OCRRequest]) -> tuple[list[str], dict]:
         """Generate mock OCR responses for testing."""
 
         responses = []
