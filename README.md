@@ -20,7 +20,25 @@ Render any URL with a deterministic Chrome-for-Testing profile, tile the page in
 
 See `PLAN_TO_IMPLEMENT_MARKDOWN_WEB_BROWSER_PROJECT.md` §§2–5, 19 for the full breakdown.
 
-## Quickstart
+## Quick Install (One-Line)
+
+For a fully automated installation including all dependencies:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yourusername/markdown_web_browser/main/install.sh | bash -s -- --yes
+```
+
+This will:
+- Install uv package manager
+- Install system dependencies (libvips)
+- Clone the repository
+- Setup Python environment
+- Install Playwright browsers
+- Configure the environment
+
+For more options: `curl -fsSL .../install.sh | bash -s -- --help`
+
+## Manual Installation
 1. **Install prerequisites**
    - Python 3.13, uv ≥0.8, and the system deps Playwright requires.
    - Install the CfT build Playwright expects: `playwright install chromium --with-deps --channel=cft`.
