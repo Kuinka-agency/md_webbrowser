@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import re
@@ -197,8 +197,9 @@ class RunPaths:
 class Store:
     """Facade around SQLite + filesystem persistence."""
 
-    def __init__(self, config: StorageConfig | None = None) -> None:
+    def __init__(self, config: StorageConfig | None = None, cache_ttl_hours: int = 24) -> None:
         self.config = config or StorageConfig.from_env()
+        self.cache_ttl_hours = cache_ttl_hours
         self.config.cache_root.mkdir(parents=True, exist_ok=True)
         self.engine = _create_engine(self.config.db_path)
         SQLModel.metadata.create_all(self.engine)
@@ -278,12 +279,19 @@ class Store:
     def find_cache_hit(self, cache_key: str | None) -> RunRecord | None:
         if not cache_key:
             return None
+
+        # Calculate TTL cutoff time
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=self.cache_ttl_hours)
+
         with self.session() as session:
             statement = (
                 select(RunRecord)
                 .where(
                     RunRecord.cache_key == cache_key,
                     RunRecord.status == "DONE",
+                    RunRecord.finished_at.is_not(None),  # Explicit NULL check
+                    # Only return cache hits within TTL window
+                    RunRecord.finished_at >= cutoff_time,
                 )
                 .order_by(desc(RunRecord.finished_at))
             )
@@ -670,13 +678,20 @@ def _cache_segments(cache_key: str) -> tuple[str, str]:
 def _create_engine(db_path: Path):
     engine = create_engine(
         f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
+        connect_args={
+            "check_same_thread": False,
+            "timeout": 30.0,  # Longer timeout for concurrent writes
+        },
     )
 
     @event.listens_for(engine, "connect")
     def _on_connect(dbapi_connection, connection_record) -> None:  # type: ignore[override]
         dbapi_connection.enable_load_extension(True)
         sqlite_vec.load(dbapi_connection)
+        # Enable WAL mode for concurrent read/write operations
+        dbapi_connection.execute("PRAGMA journal_mode=WAL").fetchone()
+        # Set busy timeout to 30 seconds
+        dbapi_connection.execute("PRAGMA busy_timeout=30000").fetchone()
 
     return engine
 

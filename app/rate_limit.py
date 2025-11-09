@@ -5,12 +5,38 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import Header, HTTPException, Request, Response, status
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.settings import Settings, settings as global_settings
+
+
+def extract_rate_limit_key(request: Request) -> str:
+    """Extract rate limit key from request.
+
+    Uses API key (if valid), auth context, or falls back to client IP.
+
+    Args:
+        request: FastAPI Request object
+
+    Returns:
+        Rate limit key string (api_key:*, api_key_id:*, or ip:*)
+    """
+    # Try to get API key from header
+    api_key = request.headers.get("X-API-Key", None)
+    if api_key and api_key.startswith("mdwb_") and len(api_key) == 37:
+        # Valid API key format - use prefix for rate limiting
+        return f"api_key:{api_key[:12]}"
+
+    # Try to get from auth context (if auth middleware ran)
+    if hasattr(request.state, "auth_context"):
+        return f"api_key_id:{request.state.auth_context.api_key_id}"
+
+    # Fall back to client IP
+    client_host = request.client.host if request.client else "unknown"
+    return f"ip:{client_host}"
 
 
 @dataclass
@@ -106,7 +132,7 @@ class RateLimiter:
             self.buckets[key] = self._create_bucket()
         return self.buckets[key]
 
-    def check_rate_limit(self, key: str, tokens: int = 1) -> tuple[bool, Dict[str, any]]:
+    def check_rate_limit(self, key: str, tokens: int = 1) -> tuple[bool, Dict[str, Any]]:
         """Check if request is allowed under rate limit.
 
         Returns:
@@ -216,26 +242,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         Uses API key if available, otherwise falls back to client IP.
         """
-        # Try to get API key from header
-        api_key = request.headers.get("X-API-Key", None)
-        if api_key:
-            # Use API key prefix as the rate limit key
-            return f"api_key:{api_key[:12]}"
-
-        # Try to get from auth context (if auth middleware ran)
-        if hasattr(request.state, "auth_context"):
-            return f"api_key_id:{request.state.auth_context.api_key_id}"
-
-        # Fall back to client IP
-        client_host = request.client.host if request.client else "unknown"
-        return f"ip:{client_host}"
+        return extract_rate_limit_key(request)
 
 
 # Dependency for manual rate limit checking in endpoints
 async def check_rate_limit(
     request: Request,
     tokens: int = 1,
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """FastAPI dependency to manually check rate limits in endpoints.
 
     Usage:
@@ -253,14 +267,7 @@ async def check_rate_limit(
     limiter = get_rate_limiter()
 
     # Get rate limit key
-    api_key = request.headers.get("X-API-Key", None)
-    if api_key:
-        key = f"api_key:{api_key[:12]}"
-    elif hasattr(request.state, "auth_context"):
-        key = f"api_key_id:{request.state.auth_context.api_key_id}"
-    else:
-        client_host = request.client.host if request.client else "unknown"
-        key = f"ip:{client_host}"
+    key = extract_rate_limit_key(request)
 
     # Check rate limit
     allowed, stats = limiter.check_rate_limit(key, tokens)

@@ -133,6 +133,7 @@ class JobManager:
         store: Store | None = None,
         runner: RunnerType | None = None,
         webhook_sender: WebhookSender | None = None,
+        job_timeout_seconds: int = 600,  # 10 minutes default
     ) -> None:
         self.store = store or build_store()
         self._runner = runner or execute_capture_job
@@ -146,6 +147,9 @@ class JobManager:
         self._pending_webhooks: Dict[str, List[dict[str, Any]]] = {}
         self._webhook_sender = webhook_sender or _default_webhook_sender
         self._cache_keys: Dict[str, str | None] = {}
+        self._job_timeout_seconds = job_timeout_seconds
+        self._watchdog_task: asyncio.Task[None] | None = None
+        self._shutdown = False
 
     async def create_job(self, request: JobCreateRequest) -> JobSnapshot:
         job_id = uuid4().hex
@@ -252,6 +256,79 @@ class JobManager:
             subscribers.remove(queue)
         if not subscribers:
             self._event_subscribers.pop(job_id, None)
+
+    def start_watchdog(self) -> None:
+        """Start the background watchdog task to monitor for stuck jobs."""
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._shutdown = False
+            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+            LOGGER.info("Job watchdog started with %ds timeout", self._job_timeout_seconds)
+
+    async def stop_watchdog(self) -> None:
+        """Stop the watchdog task gracefully."""
+        self._shutdown = True
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except asyncio.CancelledError:
+                pass
+            LOGGER.info("Job watchdog stopped")
+
+    async def _watchdog_loop(self) -> None:
+        """Background task that monitors jobs and times out stuck ones.
+
+        Note: Uses asyncio.to_thread() for database operations to avoid blocking
+        the event loop during SQLite I/O.
+        """
+        while not self._shutdown:
+            try:
+                await asyncio.sleep(60)  # Check every minute
+                now = datetime.now(timezone.utc)
+
+                for job_id, snapshot in list(self._snapshots.items()):
+                    # Skip already-completed jobs
+                    if snapshot["state"] in (JobState.DONE, JobState.FAILED):
+                        continue
+
+                    # Get the run record to check start time (run in thread to avoid blocking)
+                    record = await asyncio.to_thread(self.store.fetch_run, job_id)
+                    if not record:
+                        continue
+
+                    # Calculate elapsed time
+                    elapsed_seconds = (now - record.started_at).total_seconds()
+
+                    if elapsed_seconds > self._job_timeout_seconds:
+                        LOGGER.error(
+                            "Job %s timed out after %.1fs in state %s",
+                            job_id,
+                            elapsed_seconds,
+                            snapshot["state"],
+                        )
+
+                        # Mark job as failed
+                        self._set_state(job_id, JobState.FAILED)
+                        error_msg = f"Job timeout after {elapsed_seconds:.1f}s (max: {self._job_timeout_seconds}s)"
+                        self._set_error(job_id, error_msg)
+
+                        # Update database status (run in thread to avoid blocking)
+                        await asyncio.to_thread(
+                            self.store.update_status,
+                            job_id=job_id,
+                            status=JobState.FAILED,
+                            finished_at=now,
+                        )
+
+                        # Cancel the task if it's still running
+                        task = self._tasks.get(job_id)
+                        if task and not task.done():
+                            task.cancel()
+                            LOGGER.info("Cancelled task for timed-out job %s", job_id)
+
+            except Exception as exc:  # pragma: no cover
+                LOGGER.exception("Watchdog loop error: %s", exc)
+                # Continue running despite errors
 
     async def _run_job(self, *, job_id: str, url: str, config: CaptureConfig | None = None) -> None:
         storage = self.store

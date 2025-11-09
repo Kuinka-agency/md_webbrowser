@@ -6,12 +6,13 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Iterator, Optional
 
-from fastapi import Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlmodel import Field, Session, SQLModel, select
 
 from app.settings import Settings, settings as global_settings
+from app.store import build_store
 
 
 class APIKey(SQLModel, table=True):
@@ -21,7 +22,7 @@ class APIKey(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     key_hash: str = Field(index=True, unique=True)
-    key_prefix: str = Field(index=True)  # First 8 chars for display
+    key_prefix: str = Field(index=True)  # First 12 chars for display (mdwb_XXXXXXX)
     name: str  # Human-readable name for the key
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_used_at: datetime | None = None
@@ -72,7 +73,7 @@ def create_api_key(
     """
     plain_key = generate_api_key()
     key_hash = hash_api_key(plain_key)
-    key_prefix = plain_key[:12]  # mdwb_<first 4 hex chars>
+    key_prefix = plain_key[:12]  # mdwb_<first 7 hex chars>
 
     api_key = APIKey(
         key_hash=key_hash,
@@ -137,8 +138,22 @@ def revoke_api_key(session: Session, key_id: int) -> bool:
     return True
 
 
+def get_db_session() -> Iterator[Session]:
+    """FastAPI dependency to get database session.
+
+    Usage:
+        @app.get("/endpoint")
+        def endpoint(session: Session = Depends(get_db_session)):
+            ...
+    """
+    store = build_store()
+    with store.session() as session:
+        yield session
+
+
 async def get_auth_context(
     request: Request,
+    session: Session = Depends(get_db_session),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     settings: Settings | None = None,
 ) -> AuthContext:
@@ -173,13 +188,7 @@ async def get_auth_context(
             headers={"WWW-Authenticate": "ApiKey"},
         )
 
-    # Verify API key
-    # Note: In production, this should use a database session from the request state
-    # For now, we'll raise an exception indicating the session is not available
-    # The actual implementation will be added when integrating with the FastAPI app
-
-    # TODO: Get session from request.state.db or dependency injection
-    # For now, we'll validate the format only
+    # Verify API key format
     if not x_api_key.startswith("mdwb_") or len(x_api_key) != 37:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -187,24 +196,22 @@ async def get_auth_context(
             headers={"WWW-Authenticate": "ApiKey"},
         )
 
-    # Placeholder: In production, verify against database
-    # session = request.state.db
-    # api_key_record = verify_api_key(session, x_api_key)
-    # if not api_key_record:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_401_UNAUTHORIZED,
-    #         detail="Invalid or revoked API key",
-    #         headers={"WWW-Authenticate": "ApiKey"},
-    #     )
+    # Verify API key against database
+    api_key_record = verify_api_key(session, x_api_key)
+    if not api_key_record:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or revoked API key",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
 
-    # Return placeholder context
-    # In production, this would come from the database record
+    # Return authentication context from database record
     return AuthContext(
-        api_key_id=1,
-        api_key_name="placeholder",
-        api_key_prefix=x_api_key[:12],
-        rate_limit=100,  # Default rate limit
-        owner=None,
+        api_key_id=api_key_record.id,
+        api_key_name=api_key_record.name,
+        api_key_prefix=api_key_record.key_prefix,
+        rate_limit=api_key_record.rate_limit,
+        owner=api_key_record.owner,
     )
 
 

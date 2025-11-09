@@ -149,7 +149,7 @@ async def process_crawl_job(
             domain_allowlist=domain_allowlist or [],
         )
 
-        LOGGER.info(f"Completed crawl job {job_id}, captured {len(result['urls'])} pages")
+        LOGGER.info(f"Completed crawl job {job_id}, captured {result['completed']} pages")
 
         return {
             "status": "success",
@@ -362,6 +362,29 @@ def create_arq_worker(
     )
 
 
+# Worker lifecycle callbacks
+async def worker_startup(ctx: Dict[str, Any]) -> None:
+    """Called when worker starts."""
+    LOGGER.info("Arq worker started")
+
+
+async def worker_shutdown(ctx: Dict[str, Any]) -> None:
+    """Called when worker shuts down."""
+    LOGGER.info("Arq worker shutdown")
+
+
+async def worker_job_start(ctx: Dict[str, Any]) -> None:
+    """Called when a job starts."""
+    job_id = ctx.get("job_id", "unknown")
+    LOGGER.info(f"Job started: {job_id}")
+
+
+async def worker_job_end(ctx: Dict[str, Any]) -> None:
+    """Called when a job completes."""
+    job_id = ctx.get("job_id", "unknown")
+    LOGGER.info(f"Job completed: {job_id}")
+
+
 class WorkerSettings:
     """Arq worker settings."""
 
@@ -383,11 +406,11 @@ class WorkerSettings:
     # Health check
     health_check_interval = 30  # Seconds between health checks
 
-    # Logging
-    on_startup = lambda ctx: LOGGER.info("Arq worker started")
-    on_shutdown = lambda ctx: LOGGER.info("Arq worker shutdown")
-    on_job_start = lambda ctx: LOGGER.info(f"Job started: {ctx['job_id']}")
-    on_job_end = lambda ctx: LOGGER.info(f"Job completed: {ctx['job_id']}")
+    # Logging callbacks
+    on_startup = worker_startup
+    on_shutdown = worker_shutdown
+    on_job_start = worker_job_start
+    on_job_end = worker_job_end
 
 
 # Global queue instance

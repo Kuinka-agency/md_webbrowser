@@ -82,8 +82,7 @@ async def test_real_ocr_api_single_image():
     # Create OCR request
     request = OCRRequest(
         tile_id="test_tile_001",
-        tile_bytes=test_image,
-        tile_index=0
+        tile_bytes=test_image
     )
 
     # Submit to real OCR API
@@ -118,8 +117,7 @@ async def test_real_ocr_api_multiple_images():
         test_image = create_real_test_image(text=f"Page {i+1}")
         requests.append(OCRRequest(
             tile_id=f"tile_{i:03d}",
-            tile_bytes=test_image,
-            tile_index=i
+            tile_bytes=test_image
         ))
 
     # Submit to real OCR API
@@ -164,8 +162,7 @@ async def test_real_ocr_api_with_actual_webpage_screenshot():
     # Submit real screenshot to OCR
     request = OCRRequest(
         tile_id="real_webpage_001",
-        tile_bytes=screenshot_bytes,
-        tile_index=0
+        tile_bytes=screenshot_bytes
     )
 
     result = await submit_tiles(
@@ -195,8 +192,7 @@ async def test_real_ocr_api_error_handling():
 
     request = OCRRequest(
         tile_id="tiny_tile",
-        tile_bytes=tiny_image,
-        tile_index=0
+        tile_bytes=tiny_image
     )
 
     # Submit to real OCR API - might fail or return empty
@@ -225,8 +221,7 @@ async def test_real_ocr_api_concurrent_requests():
         )
         requests.append(OCRRequest(
             tile_id=f"concurrent_{i:03d}",
-            tile_bytes=test_image,
-            tile_index=i
+            tile_bytes=test_image
         ))
 
     # Submit all at once - tests real concurrency handling

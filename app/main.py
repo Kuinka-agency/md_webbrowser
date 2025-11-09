@@ -63,7 +63,11 @@ async def _start_prometheus_exporter() -> None:
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     await _start_prometheus_exporter()
+    # Start the job watchdog to monitor for stuck jobs
+    JOB_MANAGER.start_watchdog()
     yield
+    # Gracefully stop the watchdog on shutdown
+    await JOB_MANAGER.stop_watchdog()
 
 
 app = FastAPI(title="Markdown Web Browser", lifespan=_lifespan)
