@@ -6,13 +6,15 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, Optional
+
+if TYPE_CHECKING:
+    from app.store import Store
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlmodel import Field, Session, SQLModel, select
 
 from app.settings import Settings, settings as global_settings
-from app.store import build_store
 
 
 class APIKey(SQLModel, table=True):
@@ -90,10 +92,21 @@ def create_api_key(
     return plain_key, api_key
 
 
-def verify_api_key(session: Session, api_key: str) -> Optional[APIKey]:
+def verify_api_key(
+    session: Session,
+    api_key: str,
+    update_threshold_seconds: int = 3600,
+) -> Optional[APIKey]:
     """Verify an API key and return the corresponding record.
 
-    Updates last_used_at timestamp on successful verification.
+    Updates last_used_at timestamp only if it hasn't been updated recently,
+    to avoid database writes on every request (performance optimization).
+
+    Args:
+        session: Database session
+        api_key: API key to verify
+        update_threshold_seconds: Only update timestamp if last update was
+            more than this many seconds ago (default: 3600 = 1 hour)
 
     Returns:
         APIKey if valid and active, None otherwise
@@ -111,10 +124,18 @@ def verify_api_key(session: Session, api_key: str) -> Optional[APIKey]:
     result = session.exec(statement).first()
 
     if result:
-        # Update last used timestamp
-        result.last_used_at = datetime.now(timezone.utc)
-        session.add(result)
-        session.commit()
+        # Update last used timestamp only if it's been a while since last update
+        # This prevents a database write on every request (huge performance win)
+        now = datetime.now(timezone.utc)
+        should_update = (
+            result.last_used_at is None
+            or (now - result.last_used_at).total_seconds() > update_threshold_seconds
+        )
+
+        if should_update:
+            result.last_used_at = now
+            session.add(result)
+            session.commit()
 
     return result
 
@@ -138,15 +159,43 @@ def revoke_api_key(session: Session, key_id: int) -> bool:
     return True
 
 
+# Global store instance for database connection pooling
+# Creating the engine is expensive, so we create it once and reuse it
+_global_store: Optional["Store"] = None
+
+
+def get_store() -> "Store":
+    """Get or create the global Store instance.
+
+    This ensures we only create one database engine for the entire application,
+    enabling proper connection pooling and avoiding expensive engine initialization
+    on every request.
+
+    Returns:
+        Store: Global store instance with reusable database engine
+    """
+    global _global_store
+
+    if _global_store is None:
+        from app.store import Store
+
+        _global_store = Store()
+
+    return _global_store
+
+
 def get_db_session() -> Iterator[Session]:
     """FastAPI dependency to get database session.
+
+    Uses the global Store instance to ensure database engine is reused
+    across all requests, enabling proper connection pooling.
 
     Usage:
         @app.get("/endpoint")
         def endpoint(session: Session = Depends(get_db_session)):
             ...
     """
-    store = build_store()
+    store = get_store()  # Use global instance instead of creating new one
     with store.session() as session:
         yield session
 
@@ -229,9 +278,7 @@ def cli_generate_key(name: str, rate_limit: int | None = None, owner: str | None
     Usage:
         python -c "from app.auth import cli_generate_key; cli_generate_key('my-app')"
     """
-    from app.store import build_store
-
-    store = build_store()
+    store = get_store()  # Use global store instance
 
     with store.session() as session:
         plain_key, api_key = create_api_key(session, name, rate_limit, owner)

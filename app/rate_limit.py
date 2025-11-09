@@ -113,9 +113,6 @@ class RateLimiter:
         # Storage: key -> TokenBucket
         self.buckets: Dict[str, TokenBucket] = {}
 
-        # Global bucket for unauthenticated requests
-        self.global_bucket = self._create_bucket()
-
     def _create_bucket(self) -> TokenBucket:
         """Create a new token bucket with configured limits."""
         return TokenBucket(
@@ -250,15 +247,28 @@ async def check_rate_limit(
 ) -> Dict[str, Any]:
     """FastAPI dependency to manually check rate limits in endpoints.
 
-    Usage:
+    Usage for single token (default):
         @app.get("/expensive-operation")
         async def expensive_op(rate_info: Dict = Depends(check_rate_limit)):
             # This endpoint consumes 1 token
             ...
 
-    For operations that should consume multiple tokens:
+    For operations that consume multiple tokens, create a wrapper function:
+        async def check_rate_limit_5(request: Request) -> Dict[str, Any]:
+            return await check_rate_limit(request, tokens=5)
+
         @app.post("/batch-operation")
-        async def batch_op(rate_info: Dict = Depends(lambda r: check_rate_limit(r, tokens=5))):
+        async def batch_op(rate_info: Dict = Depends(check_rate_limit_5)):
+            # This endpoint consumes 5 tokens
+            ...
+
+    Or use functools.partial:
+        from functools import partial
+
+        @app.post("/batch-operation")
+        async def batch_op(
+            rate_info: Dict = Depends(partial(check_rate_limit, tokens=5))
+        ):
             # This endpoint consumes 5 tokens
             ...
     """
