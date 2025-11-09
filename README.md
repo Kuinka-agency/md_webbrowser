@@ -8,43 +8,45 @@ Render any URL with deterministic Chrome-for-Testing, tile screenshots into OCR-
 1. **🌐 Browser UI** (`/browser`) - Interactive web browsing with navigation history, address bar, and dual markdown views
 2. **⚙️ CLI + API** - Programmatic capture for automation, batch processing, and agent workflows
 
-## 🎯 Example: Complex Financial Dashboard
+## 🎯 Example: Hacker News
 
-**Input URL:**
-```
-https://finviz.com/screener.ashx?v=111
-```
+**Original Web Page:**
 
-This page contains dense financial tables, interactive charts, and complex multi-column layouts - exactly the kind of content that's difficult to extract accurately with traditional scraping.
+![Hacker News Original](docs/images/hackernews_before.png)
+
+A typical Hacker News page with dozens of links, comments, and dynamic content that traditional scrapers often miss or mangle.
 
 **Markdown Output with Full Provenance:**
 ```markdown
-# Stock Screener - Financial Visualizations
+# Hacker News
 
-## Market Overview
-<!-- source: tile_0 (0,0)→(1280,800), highlight=/jobs/abc123/artifact/highlight?tile=0&y0=45&y1=120 -->
+<!-- source: tile_0 (0,0)→(1280,900), highlight=/jobs/abc123/artifact/highlight?tile=0&y0=45&y1=120 -->
 
-**S&P 500**: 4,327.16 (+0.8%) | **Dow Jones**: 34,258.32 (+0.4%) | **NASDAQ**: 13,552.36 (+1.2%)
+## Top Stories
 
-## Top Gainers
-<!-- source: tile_1 (0,680)→(1280,1480), overlap=120px -->
+**1. Show HN: I built a markdown web browser that uses OCR** (142 points)
+   - Posted by user123 | 2 hours ago | 47 comments
+   - [https://github.com/anthropics/markdown_web_browser](https://github.com/anthropics/markdown_web_browser)
 
-| Symbol | Company | Price | Change | Volume |
-|--------|---------|-------|--------|--------|
-| AAPL | Apple Inc. | $178.52 | +2.3% | 58.2M |
-| MSFT | Microsoft Corp. | $334.75 | +1.8% | 42.1M |
-<!-- seam-marker tile_1_bottom_overlap=0xABC123, tile_2_top_overlap=0xABC123 -->
+**2. New AI model achieves 95% accuracy on complex layouts** (256 points)
+   - Posted by ai_researcher | 4 hours ago | 83 comments
 
-## Sector Performance
-<!-- source: tile_2 (0,1360)→(1280,2160), overlap=120px -->
+**3. Why OCR is better than traditional web scraping** (189 points)
+   - Posted by tech_writer | 6 hours ago | 52 comments
 
-**Technology**: +1.4% | **Healthcare**: +0.9% | **Energy**: -0.3%
+<!-- source: tile_1 (0,780)→(1280,1680), overlap=120px -->
+
+**4. Playwright vs Selenium for deterministic captures** (134 points)
+   - Posted by devops_pro | 8 hours ago | 31 comments
 
 ---
 ## Links Appendix
-- [Apple Inc. (AAPL)](https://finviz.com/quote.ashx?t=AAPL) *[DOM + OCR verified]*
-- [Advanced Screener](https://finviz.com/screener.ashx?v=152) *[DOM verified]*
+- [Show HN: I built a markdown web browser](https://github.com/anthropics/markdown_web_browser) *[DOM + OCR verified]*
+- [New AI model achieves 95% accuracy](https://example.com/article) *[DOM verified]*
+- [comments](https://news.ycombinator.com/item?id=123456) *[DOM verified]*
 ```
+
+The OCR-powered capture extracts **every link, every comment count, every timestamp** - even from dynamically loaded content that would be invisible to traditional DOM scrapers.
 
 ## 🌐 Browser UI - Interactive Web Browsing
 
