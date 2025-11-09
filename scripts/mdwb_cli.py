@@ -427,6 +427,11 @@ def _print_job(job: dict) -> None:
     if validation_row != "-":
         table.add_row("validation", validation_row)
     console.print(table)
+    seam_markers = manifest.get("seam_markers") if isinstance(manifest, dict) else None
+    if seam_markers:
+        _print_seam_markers(seam_markers)
+    else:
+        _print_seam_marker_counts(job.get("seam_marker_count"), job.get("seam_hash_count"))
 
 
 def _print_ocr_metrics(manifest: dict[str, Any], *, json_output: bool) -> None:

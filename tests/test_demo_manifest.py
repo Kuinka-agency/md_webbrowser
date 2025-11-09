@@ -49,10 +49,11 @@ def test_snapshot_events_surface_dom_assist_summary():
     snapshot = {
         "state": "DONE",
         "manifest": {
+            "tiles_total": 4,
             "dom_assists": [
                 {"tile_index": 0, "line": 3, "reason": "low-alpha"},
                 {"tile_index": 1, "line": 1, "reason": "punctuation"},
-            ]
+            ],
         },
     }
 
@@ -62,6 +63,8 @@ def test_snapshot_events_surface_dom_assist_summary():
     summary = json.loads(events["dom_assist"])
     assert summary["count"] == 2
     assert summary["reason_counts"][0]["count"] == 1
+    assert summary["reason_counts"][0]["ratio"] is not None
+    assert "assist_density" in summary
     assert "reasons" in summary
 
 

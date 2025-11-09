@@ -82,6 +82,26 @@ def test_jobs_show_prints_sweep_and_validation_summary(monkeypatch):
     assert "checksum mismatch" in result.output
 
 
+def test_jobs_show_prints_seam_counts_without_manifest(monkeypatch):
+    snapshot = {
+        "id": "job789",
+        "state": "DONE",
+        "url": "https://example.com/seams",
+        "progress": {"done": 1, "total": 1},
+        "manifest": None,
+        "seam_marker_count": 4,
+        "seam_hash_count": 3,
+    }
+    responses = {"/jobs/job789": StubResponse(snapshot)}
+    _patch_client_ctx(monkeypatch, responses)
+    monkeypatch.setattr(mdwb_cli, "_resolve_settings", lambda base: _fake_settings())
+
+    result = runner.invoke(mdwb_cli.cli, ["show", "job789"])
+
+    assert result.exit_code == 0
+    assert "Seam markers: 4 (unique hashes: 3)" in result.output
+
+
 def test_demo_snapshot_prints_links(monkeypatch):
     payload = {
         "id": "demo-job",

@@ -56,6 +56,29 @@ SSE_HEARTBEAT_COUNTER = Counter(
     "mdwb_sse_heartbeat_total",
     "Heartbeats emitted on HTMX/CLI SSE streams (monitors idle gaps).",
 )
+_DENSITY_BUCKETS = (
+    0.001,
+    0.005,
+    0.01,
+    0.02,
+    0.05,
+    0.1,
+    0.2,
+    0.5,
+    1.0,
+    float("inf"),
+)
+DOM_ASSIST_DENSITY = Histogram(
+    "mdwb_dom_assist_density",
+    "Assist density (assists per tile) emitted by hybrid recovery.",
+    buckets=_DENSITY_BUCKETS,
+)
+DOM_ASSIST_REASON_RATIO = Histogram(
+    "mdwb_dom_assist_reason_ratio",
+    "Per reason assist ratio (per tile when available, otherwise share of assists).",
+    labelnames=("reason",),
+    buckets=_DENSITY_BUCKETS,
+)
 
 
 def observe_manifest_metrics(manifest: Any) -> None:
@@ -79,6 +102,11 @@ def observe_manifest_metrics(manifest: Any) -> None:
     for selector, hits in _iter_blocklist_hits(manifest):
         BLOCKLIST_COUNTER.labels(selector=selector).inc(hits)
 
+    summary = getattr(manifest, "dom_assist_summary", None)
+    if summary is None and isinstance(manifest, Mapping):
+        summary = manifest.get("dom_assist_summary")
+    _observe_dom_assist_summary(summary)
+
 
 def record_job_completion(state: str) -> None:
     """Increment the job completion counter for a terminal state."""
@@ -90,6 +118,25 @@ def increment_sse_heartbeat() -> None:
     """Track SSE heartbeat emissions so alerting can detect stalls."""
 
     SSE_HEARTBEAT_COUNTER.inc()
+
+
+def _observe_dom_assist_summary(summary: Mapping[str, Any] | None) -> None:
+    if not isinstance(summary, Mapping):
+        return
+    density = summary.get("assist_density")
+    if isinstance(density, (int, float)):
+        DOM_ASSIST_DENSITY.observe(max(0.0, density))
+    reason_counts = summary.get("reason_counts")
+    if not isinstance(reason_counts, Sequence):
+        return
+    for entry in reason_counts:
+        if not isinstance(entry, Mapping):
+            continue
+        reason = entry.get("reason")
+        ratio = entry.get("ratio")
+        if reason is None or not isinstance(ratio, (int, float)):
+            continue
+        DOM_ASSIST_REASON_RATIO.labels(reason=str(reason)).observe(max(0.0, ratio))
 
 
 def _extract_timing(manifest: Any, field: str) -> float | None:

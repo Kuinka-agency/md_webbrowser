@@ -525,7 +525,11 @@ def _snapshot_events(snapshot: JobSnapshot) -> list[tuple[str, str]]:
             dom_summary = None
             dom_assists = manifest.get("dom_assists")
             if isinstance(dom_assists, list) and dom_assists:
-                dom_summary = summarize_dom_assists(dom_assists) or {"count": len(dom_assists)}
+                tiles_total = manifest.get("tiles_total")
+                tiles_total_int = tiles_total if isinstance(tiles_total, int) else None
+                dom_summary = summarize_dom_assists(dom_assists, tiles_total=tiles_total_int) or {
+                    "count": len(dom_assists)
+                }
             if not dom_summary:
                 raw_summary = manifest.get("dom_assist_summary")
                 if isinstance(raw_summary, Mapping):

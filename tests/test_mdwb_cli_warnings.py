@@ -37,10 +37,11 @@ def test_warnings_tail_json_includes_enriched_fields(tmp_path: Path, monkeypatch
             "count": 2,
             "reasons": ["low-alpha", "punctuation"],
             "reason_counts": [
-                {"reason": "low-alpha", "count": 1},
-                {"reason": "punctuation", "count": 1},
+                {"reason": "low-alpha", "count": 1, "ratio": 0.01},
+                {"reason": "punctuation", "count": 1, "ratio": 0.01},
             ],
             "sample": {"reason": "low-alpha", "dom_text": "Revenue", "tile_index": 0, "line": 3},
+            "assist_density": 0.02,
         },
     }
     log_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
@@ -62,6 +63,7 @@ def test_warnings_tail_json_includes_enriched_fields(tmp_path: Path, monkeypatch
     assert "\"validation_failure_count\"" in result.output
     assert "sweep_summary" in result.output
     assert "dom_assist_summary" in result.output
+    assert "assist_density" in result.output
     assert "overlap_match_ratio" in result.output
     assert "seam_summary_text" in result.output
 
@@ -86,8 +88,9 @@ def test_warnings_tail_pretty_output(tmp_path: Path, monkeypatch) -> None:
         "dom_assist_summary": {
             "count": 1,
             "reasons": ["low-alpha"],
-            "reason_counts": [{"reason": "low-alpha", "count": 1}],
+            "reason_counts": [{"reason": "low-alpha", "count": 1, "ratio": 0.02}],
             "sample": {"reason": "low-alpha", "dom_text": "Revenue", "tile_index": 2, "line": 5},
+            "assist_density": 0.02,
         },
     }
     log_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
@@ -109,6 +112,7 @@ def test_warnings_tail_pretty_output(tmp_path: Path, monkeypatch) -> None:
     assert "pairs=2" in result.output
     assert "xyz999" in result.output
     assert "assist" in result.output
+    assert "density" in result.output
     assert "job-2" not in result.output  # ensures only run-2 shown once
 
 

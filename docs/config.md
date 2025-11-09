@@ -93,7 +93,7 @@ in `app/schemas.py` (see `ManifestEnvironment`, `ManifestTimings`, and
 * Timing metrics (`capture_ms`, `ocr_ms`, `stitch_ms`, `total_ms`) once stages
   execute
 * Cache metadata (`cache_hit`, `cache_key`) so dashboards/CLI output can distinguish fresh captures from cache replays
-* DOM assist overlays (`dom_assists`) indicating which tiles/lines were patched with DOM text (reason + replacement) so ops/debuggers can audit hybrid recovery events
+* DOM assist overlays (`dom_assists`) plus the summary fields (`dom_assist_summary`) that report counts, assist density (assists ÷ tiles_total), and per-reason ratios so ops/debuggers can monitor hybrid recovery health
 
 ```jsonc
 {

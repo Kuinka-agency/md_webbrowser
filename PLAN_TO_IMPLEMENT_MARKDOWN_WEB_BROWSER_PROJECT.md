@@ -653,6 +653,7 @@ _2025-11-09 — PinkCastle (bd-b9e follow-up) hardened the stitcher: table heade
 - _2025-11-08 — BlueMountain (bd-805) opened to implement the low-confidence OCR detectors + DOM text overlays so headings/captions can be patched automatically when OCR struggles._
 - _2025-11-09 — BlueMountain (bd-805) delivered the first hybrid recovery pass: low-confidence heuristics now patch Markdown with DOM text (manifest `dom_assists`, event + CLI diag output, and highlight links for quick inspection)._ 
 - _2025-11-09 — PinkCastle (bd-805 follow-up) added spaced-letter/code-fence guards plus manifest/SSE summaries so CLI/UI panels show DOM-assist counts, reason buckets, and sample text without cracking manifests._
+- _2025-11-09 — PinkCastle (bd-805 follow-up) layered in density/ratio metrics so dom_assist summaries report assists per tile and per reason, keeping manifests/SSE/CLI/warning logs aligned for future dashboards._
 - _2025-11-09 — RedMountain (markdown_web_browser-co1) taught the SSE snapshot builder to fall back to `manifest.dom_assist_summary` (and reuse the shared warning_log helper) so cached/replayed jobs keep emitting DOM-assist events even when the raw `dom_assists` list is absent._
 - Detect low-confidence OCR regions (symbol rate, low alpha ratio, hyphen density) and patch them with DOM text overlays scoped to the offending block (hero headings, captions, icon fonts).
 

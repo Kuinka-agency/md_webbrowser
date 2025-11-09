@@ -55,6 +55,14 @@ def test_observe_manifest_metrics_updates_histograms_and_counters() -> None:
             ManifestWarning(code="canvas-heavy", message="canvas", count=3, threshold=2),
             ManifestWarning(code="scroll-shrink", message="shrink", count=1, threshold=1),
         ],
+        dom_assist_summary={
+            "count": 2,
+            "assist_density": 0.01,
+            "reason_counts": [
+                {"reason": "low-alpha", "count": 1, "ratio": 0.006},
+                {"reason": "punctuation", "count": 1, "ratio": 0.004},
+            ],
+        },
     )
 
     before_capture_count = _sample_value(
@@ -79,6 +87,14 @@ def test_observe_manifest_metrics_updates_histograms_and_counters() -> None:
         labels={"selector": "#cookie-banner"},
     )
 
+    before_density_sum = _sample_value(
+        metrics.DOM_ASSIST_DENSITY, "mdwb_dom_assist_density_sum"
+    )
+    before_reason_low_alpha = _sample_value(
+        metrics.DOM_ASSIST_REASON_RATIO,
+        "mdwb_dom_assist_reason_ratio_sum",
+        labels={"reason": "low-alpha"},
+    )
     metrics.observe_manifest_metrics(manifest)
 
     after_capture_count = _sample_value(
@@ -110,6 +126,16 @@ def test_observe_manifest_metrics_updates_histograms_and_counters() -> None:
     assert after_canvas == pytest.approx(before_canvas + 3)
     assert after_shrink == pytest.approx(before_shrink + 1)
     assert after_blocklist == pytest.approx(before_blocklist + 2)
+    after_density_sum = _sample_value(
+        metrics.DOM_ASSIST_DENSITY, "mdwb_dom_assist_density_sum"
+    )
+    after_reason_low_alpha = _sample_value(
+        metrics.DOM_ASSIST_REASON_RATIO,
+        "mdwb_dom_assist_reason_ratio_sum",
+        labels={"reason": "low-alpha"},
+    )
+    assert after_density_sum == pytest.approx(before_density_sum + 0.01)
+    assert after_reason_low_alpha == pytest.approx(before_reason_low_alpha + 0.006)
 
 
 def test_sse_and_job_metrics_increment() -> None:
