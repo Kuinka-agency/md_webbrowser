@@ -1572,7 +1572,10 @@ class ComprehensiveTestRunner:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         # HTML report
-        html_path = Path(f"test_report_{timestamp}.html")
+        project_root = Path(__file__).parent.parent
+        reports_dir = project_root / "test-outputs/reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        html_path = reports_dir / f"test_report_{timestamp}.html"
         html_path.write_text(self.console.export_html(clear=False), encoding="utf-8")
 
         # JSON report for CI/CD
@@ -1597,7 +1600,7 @@ class ComprehensiveTestRunner:
             "system_stats": system_stats,
         }
 
-        json_path = Path(f"test_report_{timestamp}.json")
+        json_path = reports_dir / f"test_report_{timestamp}.json"
         json_path.write_text(json.dumps(json_report, indent=2), encoding="utf-8")
 
         self.console.print(f"\n📄 Reports saved:")

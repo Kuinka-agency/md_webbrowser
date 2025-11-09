@@ -219,4 +219,8 @@ out/
 signing-*.key
 signing-*.pub
 test_report_*
+
+# Test output files
+test-outputs/
+
 ops/warnings.jsonl

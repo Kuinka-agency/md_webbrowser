@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Iterator, Optional
@@ -127,9 +128,17 @@ def verify_api_key(
         # Update last used timestamp only if it's been a while since last update
         # This prevents a database write on every request (huge performance win)
         now = datetime.now(timezone.utc)
+
+        # Handle timezone-aware/naive datetime comparison
+        # SQLite doesn't preserve timezone info, so we need to ensure compatibility
+        last_used = result.last_used_at
+        if last_used is not None and last_used.tzinfo is None:
+            # Database returned naive datetime - assume UTC
+            last_used = last_used.replace(tzinfo=timezone.utc)
+
         should_update = (
-            result.last_used_at is None
-            or (now - result.last_used_at).total_seconds() > update_threshold_seconds
+            last_used is None
+            or (now - last_used).total_seconds() > update_threshold_seconds
         )
 
         if should_update:
@@ -162,6 +171,7 @@ def revoke_api_key(session: Session, key_id: int) -> bool:
 # Global store instance for database connection pooling
 # Creating the engine is expensive, so we create it once and reuse it
 _global_store: Optional["Store"] = None
+_store_lock = threading.Lock()
 
 
 def get_store() -> "Store":
@@ -171,15 +181,24 @@ def get_store() -> "Store":
     enabling proper connection pooling and avoiding expensive engine initialization
     on every request.
 
+    Thread-safe singleton implementation using double-checked locking pattern.
+
     Returns:
         Store: Global store instance with reusable database engine
     """
     global _global_store
 
-    if _global_store is None:
-        from app.store import Store
+    # Fast path - if already initialized, return immediately without locking
+    if _global_store is not None:
+        return _global_store
 
-        _global_store = Store()
+    # Slow path - need to initialize, acquire lock
+    with _store_lock:
+        # Double-check: another thread might have initialized while we waited for lock
+        if _global_store is None:
+            from app.store import Store
+
+            _global_store = Store()
 
     return _global_store
 
