@@ -49,6 +49,16 @@ After extensive research on text deduplication, OCR stitching, and string matchi
    - **Fix**: Special case for matching empty lines
    - **Test**: `test_empty_lines_counted_as_match` passing
 
+### Bugs Fixed During Code Review
+
+4. **Sequence Matching (Tier 3) Non-Functional** (Fixed in `app/dedup.py:272-340`)
+   - **Issue**: Used `SequenceMatcher.get_matching_blocks()` which only found exact matches
+   - **Root Cause**: SequenceMatcher compared list elements with `==`, making tier redundant with exact matching
+   - **Fix**: Complete rewrite to implement average similarity matching
+   - **Behavior**: Now accepts matches where average line similarity >= threshold (more lenient than fuzzy)
+   - **New Tests**: Added 3 tests validating averaging behavior and tier differences
+   - **Test Results**: 25/25 passing (was 22/22 before fix)
+
 ### Schema Updates
 
 Added to `app/schemas.py`:
@@ -60,16 +70,16 @@ Added to `app/schemas.py`:
 
 ```bash
 $ python3 -m pytest tests/test_deduplication.py -v
-=================== 22 passed in 0.07s ===================
+=================== 25 passed in 0.06s ===================
 ```
 
 **Test Coverage**:
 - Exact boundary matching: 5 tests ✅
-- Sequence matching: 2 tests ✅
+- Sequence matching: 4 tests ✅ (added 2 new tests after fix)
 - Fuzzy matching: 3 tests ✅
 - Overlap estimation: 2 tests ✅
 - Integration tests: 8 tests ✅
-- Tier fallback: 2 tests ✅
+- Tier fallback: 3 tests ✅ (added 1 new test demonstrating tier differences)
 
 ---
 
@@ -972,9 +982,9 @@ LOGGER.info(
 6. ⏳ **PENDING**: Monitor and tune based on real data (post-deployment)
 
 **Actual Implementation Time**: ~1 day (2025-11-09)
-**Actual Testing Time**: ~2 hours (22 tests created and passing)
-**Bugs Fixed**: 3 (boundary matching, fuzzy matching, empty line handling)
-**Risk**: Low (has kill switch, conservative by default, thoroughly tested)
+**Actual Testing Time**: ~2 hours initial + 1 hour review/fix (25 tests, all passing)
+**Bugs Fixed**: 4 (boundary matching, fuzzy matching, empty line handling, sequence matching)
+**Risk**: Very Low (has kill switch, conservative by default, thoroughly tested, code-reviewed)
 
 ---
 
