@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from fastapi import Header, HTTPException, Request, Response, status
+from fastapi import HTTPException, Request, Response, status
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.settings import Settings, settings as global_settings
+from app.settings import Settings
 
 
 def extract_rate_limit_key(request: Request) -> str:
@@ -180,7 +179,6 @@ def get_rate_limiter(settings: Settings | None = None) -> RateLimiter:
     global _global_limiter
 
     if _global_limiter is None:
-        active_settings = settings or global_settings
         # Default to 60 requests per minute
         # In production, this should be configurable per API key
         _global_limiter = RateLimiter(requests_per_minute=60)

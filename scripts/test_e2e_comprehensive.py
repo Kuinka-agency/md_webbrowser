@@ -1309,7 +1309,8 @@ class ComprehensiveTestRunner:
 
             except Exception as e:
                 # Log error but continue monitoring
-                pass
+                if self.verbose:
+                    self.console.print(f"[yellow]Warning: Job monitoring error: {e}[/yellow]")
 
         return "TIMEOUT"
 

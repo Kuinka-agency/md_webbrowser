@@ -82,6 +82,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --dir)
+            if [ -z "${2:-}" ]; then
+                print_color "$RED" "Error: --dir requires a path argument"
+                exit 1
+            fi
             INSTALL_DIR="$2"
             shift 2
             ;;
@@ -98,6 +102,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --ocr-key)
+            if [ -z "${2:-}" ]; then
+                print_color "$RED" "Error: --ocr-key requires a value"
+                exit 1
+            fi
             OCR_API_KEY="$2"
             shift 2
             ;;
@@ -239,7 +247,7 @@ install_system_deps() {
 # Function to clone or update repository
 setup_repository() {
     # Validate INSTALL_DIR before any dangerous operations
-    if [ -z "$INSTALL_DIR" ] || [ "$INSTALL_DIR" = "/" ] || [ "$INSTALL_DIR" = "/usr" ] || [ "$INSTALL_DIR" = "/bin" ] || [ "$INSTALL_DIR" = "/etc" ]; then
+    if [ -z "$INSTALL_DIR" ] || [ "$INSTALL_DIR" = "/" ] || [ "$INSTALL_DIR" = "." ] || [ "$INSTALL_DIR" = ".." ] || [ "$INSTALL_DIR" = "/usr" ] || [ "$INSTALL_DIR" = "/bin" ] || [ "$INSTALL_DIR" = "/etc" ] || [ "$INSTALL_DIR" = "/home" ] || [ "$INSTALL_DIR" = "$HOME" ]; then
         print_color "$RED" "Error: Invalid or dangerous installation directory: '$INSTALL_DIR'"
         exit 1
     fi

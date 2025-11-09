@@ -6,16 +6,15 @@ import io
 from typing import Iterator
 
 import pytest
-from decouple import Config as DecoupleConfig, RepositoryEnv
 from PIL import Image, ImageDraw, ImageFont
 from playwright.async_api import async_playwright
 
 from app.ocr_client import OCRRequest, reset_quota_tracker, submit_tiles
-from app.settings import get_settings
+from app.settings import get_settings, load_config
 
 
 # Load environment variables using decouple
-decouple_config = DecoupleConfig(RepositoryEnv(".env"))
+decouple_config = load_config()
 OLMOCR_API_KEY = decouple_config("OLMOCR_API_KEY", default="")
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from enum import Enum
 from typing import Any, Callable, Dict, Optional
 
@@ -13,7 +13,7 @@ from arq.connections import ArqRedis, RedisSettings
 from arq.jobs import Job, JobStatus
 from arq.worker import Worker, create_worker, func
 
-from app.settings import Settings, settings as global_settings
+from app.settings import Settings
 
 LOGGER = logging.getLogger(__name__)
 
@@ -48,7 +48,6 @@ class QueueConfig:
     @classmethod
     def from_env(cls, settings: Settings | None = None) -> QueueConfig:
         """Load configuration from environment variables."""
-        active_settings = settings or global_settings
 
         # In a real implementation, these would come from settings
         # For now, use defaults

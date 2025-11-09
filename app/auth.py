@@ -105,7 +105,7 @@ def verify_api_key(session: Session, api_key: str) -> Optional[APIKey]:
 
     statement = select(APIKey).where(
         APIKey.key_hash == key_hash,
-        APIKey.is_active == True,
+        APIKey.is_active.is_(True),
     )
 
     result = session.exec(statement).first()
@@ -206,6 +206,13 @@ async def get_auth_context(
         )
 
     # Return authentication context from database record
+    # api_key_record.id should always be set for records from DB, but check for type safety
+    if api_key_record.id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error: API key missing ID",
+        )
+
     return AuthContext(
         api_key_id=api_key_record.id,
         api_key_name=api_key_record.name,
@@ -229,12 +236,12 @@ def cli_generate_key(name: str, rate_limit: int | None = None, owner: str | None
     with store.session() as session:
         plain_key, api_key = create_api_key(session, name, rate_limit, owner)
 
-        print(f"\n✅ API Key created successfully!")
+        print("\n✅ API Key created successfully!")
         print(f"\nKey ID: {api_key.id}")
         print(f"Name: {api_key.name}")
         print(f"Prefix: {api_key.key_prefix}")
         print(f"Rate Limit: {api_key.rate_limit or 'None (unlimited)'}")
         print(f"Owner: {api_key.owner or 'None'}")
-        print(f"\n🔑 API Key (save this, it won't be shown again):")
+        print("\n🔑 API Key (save this, it won't be shown again):")
         print(f"\n  {plain_key}\n")
         print(f"Use this key in requests with header: X-API-Key: {plain_key}\n")
