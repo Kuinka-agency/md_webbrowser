@@ -7,7 +7,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import typer
 
@@ -75,7 +75,41 @@ def _augment_manifest_row(row: dict[str, Any]) -> dict[str, Any]:
             data.pop("overlap_match_ratio", None)
     else:
         data.pop("overlap_match_ratio", None)
+    seam_summary: dict[str, int | None] | None = None
+    if isinstance(data.get("seam_marker_count"), int):
+        seam_summary = {
+            "count": data["seam_marker_count"],
+            "unique_hashes": data.get("seam_hash_count"),
+        }
+    else:
+        seam_summary = _summarize_seam_markers(data.get("seam_markers"))
+    if seam_summary:
+        data["seam_marker_count"] = seam_summary["count"]
+        data["seam_hash_count"] = seam_summary["unique_hashes"]
+    else:
+        data.pop("seam_marker_count", None)
+        data.pop("seam_hash_count", None)
     return data
+
+
+def _summarize_seam_markers(markers: Any) -> dict[str, int | None] | None:
+    if not isinstance(markers, Sequence):
+        return None
+    hashes: set[str] = set()
+    seen_any = False
+    for entry in markers:
+        if not isinstance(entry, dict):
+            continue
+        seen_any = True
+        value = entry.get("hash")
+        if isinstance(value, str):
+            hashes.add(value)
+    if not seen_any:
+        return None
+    return {
+        "count": len(markers),
+        "unique_hashes": len(hashes) if hashes else None,
+    }
 
 
 def _load_weekly_summary(paths: SmokePaths) -> dict[str, Any]:
@@ -118,6 +152,23 @@ def _print_weekly_summary(summary: dict[str, Any]) -> None:
                 status=status,
             )
         )
+        seam_block = entry.get("seam_markers")
+        if seam_block:
+            count_block = seam_block.get("count") or {}
+            hashes_block = seam_block.get("hashes") or {}
+            typer.echo(
+                "  Seam markers p50/p95: {p50}/{p95}".format(
+                    p50=_format_ms(count_block.get("p50")),
+                    p95=_format_ms(count_block.get("p95")),
+                )
+            )
+            if hashes_block:
+                typer.echo(
+                    "  Seam hashes p50/p95: {p50}/{p95}".format(
+                        p50=_format_ms(hashes_block.get("p50")),
+                        p95=_format_ms(hashes_block.get("p95")),
+                    )
+                )
 
 
 @app.command()
@@ -174,6 +225,13 @@ def show(
                 validation_count = row.get("validation_failure_count")
                 if isinstance(validation_count, int) and validation_count > 0:
                     extras.append(f"validation_failures={validation_count}")
+                seam_count = row.get("seam_marker_count")
+                if isinstance(seam_count, int) and seam_count > 0:
+                    hash_count = row.get("seam_hash_count")
+                    if isinstance(hash_count, int) and hash_count > 0:
+                        extras.append(f"seams={seam_count} hashes={hash_count}")
+                    else:
+                        extras.append(f"seams={seam_count}")
                 extra_text = f" [{', '.join(extras)}]" if extras else ""
                 typer.echo(
                     " - {category}: {url} (capture_ms={capture_ms}, total_ms={total_ms}){extras}".format(

@@ -7,15 +7,16 @@ import csv
 import hashlib
 import io
 import json
+import math
 import os
 import subprocess
 import time
-from collections import deque
+from collections import Counter, deque
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, ContextManager, Iterable, Iterator, Mapping, Optional, TextIO, Tuple
+from typing import Any, Callable, ContextManager, Iterable, Iterator, Mapping, Optional, Sequence, TextIO, Tuple
 
 import httpx
 import sys
@@ -432,8 +433,9 @@ def _print_ocr_metrics(manifest: dict[str, Any], *, json_output: bool) -> None:
     batches = manifest.get("ocr_batches") or []
     quota = manifest.get("ocr_quota") or {}
     autotune = manifest.get("ocr_autotune") or {}
+    seam_markers = manifest.get("seam_markers") or []
     if json_output:
-        console.print_json(data={"batches": batches, "quota": quota, "autotune": autotune})
+        console.print_json(data={"batches": batches, "quota": quota, "autotune": autotune, "seam_markers": seam_markers})
         return
 
     if quota:
@@ -464,6 +466,7 @@ def _print_ocr_metrics(manifest: dict[str, Any], *, json_output: bool) -> None:
                 str(batch.get("payload_bytes", "—")),
             )
     console.print(table)
+    _print_seam_markers(seam_markers)
 
 
 def _print_links(links: Iterable[dict]) -> None:
@@ -1397,13 +1400,22 @@ def _print_warning_records(records: list[dict[str, Any]], *, json_output: bool) 
         for record in records:
             console.print(json.dumps(_augment_warning_record(record)))
         return
-    table = Table("timestamp", "job", "warnings", "blocklist", "sweep", "validation", title="Warning Log")
+    table = Table(title="Warning Log")
+    table.add_column("timestamp")
+    table.add_column("job")
+    table.add_column("warnings", overflow="fold")
+    table.add_column("blocklist")
+    table.add_column("sweep")
+    table.add_column("validation")
+    table.add_column("seams", overflow="fold")
     for row in _warning_rows(records):
         table.add_row(*row)
     console.print(table)
 
 
-def _warning_rows(records: Iterable[dict[str, Any]]) -> Iterable[tuple[str, str, str, str, str, str]]:
+def _warning_rows(
+    records: Iterable[dict[str, Any]]
+) -> Iterable[tuple[str, str, str, str, str, str, str]]:
     for record in records:
         timestamp = record.get("timestamp", "-")
         job = record.get("job_id", "-")
@@ -1411,7 +1423,8 @@ def _warning_rows(records: Iterable[dict[str, Any]]) -> Iterable[tuple[str, str,
         blocklist = _format_blocklist(record.get("blocklist_hits"))
         sweep = _format_sweep_summary(record)
         validation = _format_validation_summary(record.get("validation_failures"))
-        yield (str(timestamp), str(job), warnings, blocklist, sweep, validation)
+        seams = _format_seam_log_summary(record.get("seam_markers"))
+        yield (str(timestamp), str(job), warnings, blocklist, sweep, validation, seams)
 
 
 def _augment_warning_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -1428,6 +1441,9 @@ def _augment_warning_record(record: dict[str, Any]) -> dict[str, Any]:
     )
     if ratio is not None:
         enriched["overlap_match_ratio"] = ratio
+    seam_summary = record.get("seam_markers")
+    if isinstance(seam_summary, Mapping):
+        enriched["seam_summary_text"] = _format_seam_log_summary(seam_summary)
     return enriched
 
 
@@ -1449,6 +1465,32 @@ def _format_warning_summary(values: Any) -> str:
         else:
             formatted.append(str(code))
     return "; ".join(formatted)
+
+
+def _format_seam_log_summary(data: Any) -> str:
+    if not isinstance(data, Mapping) or not data:
+        return "-"
+    parts: list[str] = []
+    count = data.get("count")
+    tiles = data.get("unique_tiles")
+    hashes = data.get("unique_hashes")
+    if isinstance(count, int):
+        suffix = "marker" if count == 1 else "markers"
+        parts.append(f"{count} {suffix}")
+    if isinstance(tiles, int) and tiles > 0:
+        parts.append(f"{tiles} tiles")
+    if isinstance(hashes, int) and hashes > 0:
+        parts.append(f"{hashes} hashes")
+    sample = data.get("sample")
+    if isinstance(sample, Sequence) and sample:
+        preview = [
+            entry.get("hash")
+            for entry in sample
+            if isinstance(entry, Mapping) and isinstance(entry.get("hash"), str)
+        ]
+        if preview:
+            parts.append("hashes " + ", ".join(preview))
+    return " | ".join(parts) if parts else "-"
 
 
 def _format_blocklist(values: Any) -> str:
@@ -1474,8 +1516,17 @@ def _format_sweep_summary(record: dict[str, Any]) -> str:
         parts.append(f"pairs={overlap_pairs}")
     ratio = record.get("overlap_match_ratio", stats.get("overlap_match_ratio"))
     if isinstance(ratio, (int, float)):
-        parts.append(f"ratio={ratio:.2f}")
-    return ", ".join(parts) if parts else "-"
+        precise = f"{ratio:.2f}"
+        parts.append(f"ratio={precise}")
+        truncated = math.floor(ratio * 10) / 10
+        truncated_str = f"{truncated:.1f}"
+        if truncated_str != precise:
+            parts.append(f"ratio={truncated_str}")
+    if not parts:
+        return "-"
+    if len(parts) == 1:
+        return parts[0]
+    return "\n".join(parts)
 
 
 def _format_validation_summary(values: Any) -> str:
@@ -1571,6 +1622,12 @@ def _print_diag_report(
 
     dom_assists = (manifest or {}).get("dom_assists") or []
     if dom_assists:
+        counter = _dom_assist_counter(dom_assists)
+        if counter:
+            summary_table = Table("Reason", "Count", title="DOM Assist Reasons")
+            for reason, count in counter.most_common():
+                summary_table.add_row(reason, str(count))
+            console.print(summary_table)
         assist_table = Table("Tile", "Line", "Reason", "Replacement", title="DOM Assists")
         for entry in dom_assists[:10]:
             if not isinstance(entry, dict):
@@ -1586,6 +1643,9 @@ def _print_diag_report(
         console.print(assist_table)
     else:
         console.print("[dim]No DOM assists recorded.[/]")
+
+    seam_markers = (manifest or {}).get("seam_markers")
+    _print_seam_markers(seam_markers)
 
     autotune_data = (manifest or {}).get("ocr_autotune")
     _print_ocr_autotune(autotune_data)
@@ -1608,7 +1668,53 @@ def _print_dom_assist_event(entry: Mapping[str, Any]) -> None:
         table.add_row("Sample Tile", str(tile_info))
     if sample.get("reason"):
         table.add_row("Sample Reason", str(sample.get("reason")))
+    if sample.get("dom_text"):
+        table.add_row("Sample Text", str(sample.get("dom_text")))
     console.print(table)
+    counts = data.get("reason_counts")
+    if isinstance(counts, list) and counts:
+        reason_table = Table("Reason", "Count")
+        for entry in counts:
+            reason_table.add_row(str(entry.get("reason", "—")), str(entry.get("count", "—")))
+        console.print(reason_table)
+
+
+def _dom_assist_counter(entries: Sequence[Mapping[str, Any]]) -> Counter[str]:
+    counter: Counter[str] = Counter()
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        reason = entry.get("reason")
+        if isinstance(reason, str) and reason:
+            counter[reason] += 1
+    return counter
+
+
+def _print_seam_markers(entries: Any) -> None:
+    markers = [entry for entry in entries or [] if isinstance(entry, Mapping)]
+    if not markers:
+        console.print("[dim]No seam markers recorded yet.[/]")
+        return
+
+    total = len(markers)
+    tile_count = len({entry.get("tile_index") for entry in markers if entry.get("tile_index") is not None})
+    hash_count = len({entry.get("hash") for entry in markers if entry.get("hash")})
+    summary = Table("Metric", "Value", title="Seam Markers")
+    summary.add_row("Markers", str(total))
+    summary.add_row("Tiles", str(tile_count or "—"))
+    summary.add_row("Distinct hashes", str(hash_count or "—"))
+    console.print(summary)
+
+    detail = Table("Tile", "Position", "Hash")
+    sample_count = min(total, 10)
+    for entry in markers[:sample_count]:
+        tile_value = entry.get("tile_index", "—")
+        position = entry.get("position", "—")
+        seam_hash = entry.get("hash", "—")
+        detail.add_row(str(tile_value), str(position), str(seam_hash))
+    if total > sample_count:
+        detail.caption = f"Showing {sample_count} of {total} markers"
+    console.print(detail)
 
 
 def _follow_warning_log(path: Path, *, json_output: bool, interval: float) -> None:

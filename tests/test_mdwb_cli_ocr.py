@@ -51,6 +51,10 @@ def test_jobs_ocr_metrics_prints_table(monkeypatch):
             }
         ],
         "ocr_quota": {"limit": 10, "used": 7, "threshold_ratio": 0.7, "warning_triggered": True},
+        "seam_markers": [
+            {"tile_index": 0, "position": "top", "hash": "abc123"},
+            {"tile_index": 0, "position": "bottom", "hash": "def456"},
+        ],
     }
     response = StubResponse({"id": "job", "manifest": manifest})
     stub = StubClient({"/jobs/job": response})
@@ -63,10 +67,15 @@ def test_jobs_ocr_metrics_prints_table(monkeypatch):
     assert "OCR Batches" in result.output
     assert "req-1" in result.output
     assert "70%" in result.output
+    assert "Seam Markers" in result.output
 
 
 def test_jobs_ocr_metrics_json_output(monkeypatch):
-    manifest = {"ocr_batches": [], "ocr_quota": {"limit": None, "used": None, "threshold_ratio": 0.7}}
+    manifest = {
+        "ocr_batches": [],
+        "ocr_quota": {"limit": None, "used": None, "threshold_ratio": 0.7},
+        "seam_markers": [{"tile_index": 2, "position": "top", "hash": "xyz999"}],
+    }
     response = StubResponse({"id": "job", "manifest": manifest})
     stub = StubClient({"/jobs/job": response})
     monkeypatch.setattr(mdwb_cli, "_client", lambda settings, http2=True, **_: stub)
@@ -76,6 +85,7 @@ def test_jobs_ocr_metrics_json_output(monkeypatch):
 
     assert result.exit_code == 0
     assert "\"batches\": []" in result.output
+    assert "\"seam_markers\"" in result.output
 
 
 def test_jobs_ocr_metrics_errors_when_manifest_missing(monkeypatch):
@@ -102,6 +112,7 @@ def test_show_command_prints_ocr_metrics(monkeypatch):
             }
         ],
         "ocr_quota": {"limit": None, "used": None, "threshold_ratio": 0.7},
+        "seam_markers": [{"tile_index": 5, "position": "bottom", "hash": "tail55"}],
     }
     snapshot = {"id": "job", "manifest": manifest}
     monkeypatch.setattr(mdwb_cli, "_fetch_job_snapshot", lambda job_id, settings, http2=True: snapshot)
@@ -111,3 +122,4 @@ def test_show_command_prints_ocr_metrics(monkeypatch):
 
     assert result.exit_code == 0
     assert "OCR Batches" in result.output
+    assert "Seam Markers" in result.output

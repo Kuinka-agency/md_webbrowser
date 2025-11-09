@@ -95,7 +95,9 @@ class CaptureManifest:
     ocr_batches: list[dict[str, object]] = field(default_factory=list)
     ocr_quota: dict[str, object] | None = None
     dom_assists: list[dict[str, object]] = field(default_factory=list)
+    dom_assist_summary: dict[str, object] | None = None
     ocr_autotune: dict[str, object] | None = None
+    seam_markers: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -132,6 +134,7 @@ async def capture_tiles(config: CaptureConfig) -> CaptureResult:
                 warnings,
                 dom_snapshot,
                 validation_failures,
+                seam_markers,
             ) = await _perform_viewport_sweeps(
                 context,
                 config,
@@ -186,6 +189,7 @@ async def capture_tiles(config: CaptureConfig) -> CaptureResult:
         cache_key=config.cache_key,
     )
 
+    manifest_payload.seam_markers = seam_markers
     return CaptureResult(tiles=tiles, manifest=manifest_payload, dom_snapshot=dom_snapshot)
 
 
@@ -210,6 +214,7 @@ async def _perform_viewport_sweeps(
     list[CaptureWarningEntry],
     bytes | None,
     list[str],
+    list[dict[str, object]],
 ]:
     page = await context.new_page()
     await _mask_automation(page)
@@ -217,6 +222,7 @@ async def _perform_viewport_sweeps(
 
     await page.goto(config.url, wait_until="networkidle")
     blocklist_hits = await apply_blocklist(page, url=config.url, config=blocklist_config)
+    await _ensure_watermark_injected(page)
     warning_entries: list[CaptureWarningEntry] = await collect_capture_warnings(page, warning_settings)
     await page.evaluate("window.scrollTo(0, 0)")
     await page.wait_for_timeout(settle_ms)
@@ -235,6 +241,17 @@ async def _perform_viewport_sweeps(
     previous_tile: TileSlice | None = None
 
     while sweep_count < max_steps:
+        top_hash = _seam_hash(y_offset) if y_offset > 0 else None
+        bottom_reference = min(y_offset + config.viewport_height, scroll_height)
+        bottom_hash = _seam_hash(bottom_reference)
+        await _update_watermark_overlay(
+            page,
+            top_hash=top_hash,
+            bottom_hash=bottom_hash,
+            show_top=y_offset > 0,
+            show_bottom=True,
+        )
+
         screenshot = await page.screenshot(
             type="png",
             full_page=False,
@@ -255,6 +272,12 @@ async def _perform_viewport_sweeps(
             failure = f"viewport sweep {sweep_count}: {exc}"
             validation_failures.append(failure)
             raise
+        if new_tiles:
+            if top_hash:
+                new_tiles[0].seam_top_hash = top_hash
+            if bottom_hash:
+                new_tiles[-1].seam_bottom_hash = bottom_hash
+
         for tile in new_tiles:
             if previous_tile:
                 match = _overlap_match(previous_tile, tile)
@@ -313,7 +336,120 @@ async def _perform_viewport_sweeps(
     )
     warning_entries.extend(sweep_warnings)
     dom_bytes: bytes | None = dom_html.encode("utf-8") if dom_html else None
-    return tiles, stats, user_agent, blocklist_hits, warning_entries, dom_bytes, validation_failures
+    seam_markers = _collect_seam_markers(tiles)
+    return (
+        tiles,
+        stats,
+        user_agent,
+        blocklist_hits,
+        warning_entries,
+        dom_bytes,
+        validation_failures,
+        seam_markers,
+    )
+
+
+_WATERMARK_STYLE = """
+#mdwb-watermark-top,#mdwb-watermark-bottom {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 2147483647;
+  pointer-events: none;
+  mix-blend-mode: difference;
+  opacity: 0.55;
+  background-size: 24px 2px;
+}
+#mdwb-watermark-top { top: 0; }
+#mdwb-watermark-bottom { bottom: 0; }
+"""
+
+
+async def _ensure_watermark_injected(page: Page) -> None:
+    await page.add_style_tag(content=_WATERMARK_STYLE)
+    await page.evaluate(
+        """
+(() => {
+  if (window.__mdwbWatermarkReady) return;
+  const top = document.getElementById('mdwb-watermark-top') || document.createElement('div');
+  top.id = 'mdwb-watermark-top';
+  const bottom = document.getElementById('mdwb-watermark-bottom') || document.createElement('div');
+  bottom.id = 'mdwb-watermark-bottom';
+  if (!top.isConnected) document.body.appendChild(top);
+  if (!bottom.isConnected) document.body.appendChild(bottom);
+  window.__mdwbWatermarkTop = top;
+  window.__mdwbWatermarkBottom = bottom;
+  window.__mdwbWatermarkReady = true;
+})();
+        """
+    )
+
+
+async def _update_watermark_overlay(
+    page: Page,
+    *,
+    top_hash: str | None,
+    bottom_hash: str | None,
+    show_top: bool,
+    show_bottom: bool,
+) -> None:
+    await page.evaluate(
+        """
+({ topHash, bottomHash, showTop, showBottom }) => {
+  if (!window.__mdwbWatermarkReady) {
+    return;
+  }
+  const apply = (el, hash, visible) => {
+    if (!el) return;
+    if (!visible || !hash) {
+      el.style.display = 'none';
+      return;
+    }
+    const color = `#${hash}`;
+    el.style.display = 'block';
+    el.style.backgroundImage = `repeating-linear-gradient(90deg, ${color} 0 12px, transparent 12px 24px)`;
+  };
+  apply(window.__mdwbWatermarkTop, topHash, showTop);
+  apply(window.__mdwbWatermarkBottom, bottomHash, showBottom);
+};
+        """,
+        {
+            "topHash": top_hash,
+            "bottomHash": bottom_hash,
+            "showTop": show_top,
+            "showBottom": show_bottom,
+        },
+    )
+
+
+def _seam_hash(value: int) -> str:
+    import hashlib
+
+    digest = hashlib.sha1(str(value).encode("utf-8")).hexdigest()
+    return digest[:6]
+
+
+def _collect_seam_markers(tiles: Sequence[TileSlice]) -> list[dict[str, object]]:
+    markers: list[dict[str, object]] = []
+    for tile in tiles:
+        if tile.seam_top_hash:
+            markers.append(
+                {
+                    "tile_index": tile.index,
+                    "position": "top",
+                    "hash": tile.seam_top_hash,
+                }
+            )
+        if tile.seam_bottom_hash:
+            markers.append(
+                {
+                    "tile_index": tile.index,
+                    "position": "bottom",
+                    "hash": tile.seam_bottom_hash,
+                }
+            )
+    return markers
 
 
 _CHANNEL_ALIASES = {

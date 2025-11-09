@@ -41,6 +41,8 @@ class TileSlice:
     overlap_px: int
     top_overlap_sha256: Optional[str]
     bottom_overlap_sha256: Optional[str]
+    seam_top_hash: Optional[str] = None
+    seam_bottom_hash: Optional[str] = None
 
 
 async def slice_into_tiles(

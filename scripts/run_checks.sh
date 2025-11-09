@@ -96,10 +96,20 @@ run_pytest() {
 run_pytest
 
 if [[ "${MDWB_RUN_E2E:-0}" == "1" ]]; then
-  run_step "pytest (e2e)" uv run pytest tests/test_e2e_cli.py
+  run_step "pytest (e2e small)" uv run pytest tests/test_e2e_small.py
 else
-  echo "→ pytest (e2e)"
-  echo "SKIP: Set MDWB_RUN_E2E=1 to include tests/test_e2e_cli.py"
+  echo "→ pytest (e2e small)"
+  echo "SKIP: Set MDWB_RUN_E2E=1 to include tests/test_e2e_small.py"
+  echo
+fi
+
+if [[ "${MDWB_RUN_E2E_RICH:-0}" == "1" ]]; then
+  RICH_DIR="${RICH_E2E_ARTIFACT_DIR:-tmp/rich_e2e_cli}"
+  mkdir -p "$RICH_DIR"
+  run_step "pytest (e2e rich)" env RICH_E2E_ARTIFACT_DIR="$RICH_DIR" uv run pytest tests/test_e2e_cli.py
+else
+  echo "→ pytest (e2e rich)"
+  echo "SKIP: Set MDWB_RUN_E2E_RICH=1 to include tests/test_e2e_cli.py (FlowLogger transcripts under tmp/)."
   echo
 fi
 

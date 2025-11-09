@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.dom_links import DomHeading, DomTextOverlay
+from app.dom_links import DomHeading, DomTextOverlay, normalize_heading_text
 from app.stitch import stitch_markdown
 from app.tiler import TileSlice
 
@@ -98,7 +98,21 @@ def test_stitch_emits_seam_marker_for_matching_overlap() -> None:
     result = stitch_markdown(["chunk A", "chunk B"], tiles)
     output = result.markdown
 
-    assert "<!-- seam-marker: prev=tile_0000, curr=tile_0001" in output
+    assert "seam-marker: prev=tile_0000" in output
+
+
+def test_seam_marker_includes_hash_when_present() -> None:
+    tiles = [
+        _tile(0, 0, bottom_sha=None),
+        _tile(1, 400, top_sha=None),
+    ]
+    tiles[0].seam_bottom_hash = "abc123"
+    tiles[1].seam_top_hash = "abc123"
+
+    result = stitch_markdown(["chunk A", "chunk B"], tiles)
+    output = result.markdown
+
+    assert "seam_hash=abc123" in output
 
 
 def test_table_header_similarity_trim() -> None:
@@ -120,6 +134,31 @@ def test_table_header_similarity_trim() -> None:
 
     assert output.count("| Col") == 1
     assert "table-header-trimmed reason=similar" in output
+
+
+def test_table_header_trim_skips_leading_blank_lines_and_comments() -> None:
+    tiles = [
+        _tile(0, 0, bottom_sha="aaa"),
+        _tile(1, 400, top_sha="aaa"),
+    ]
+    chunk1 = """| Name | Value |
+| ---- | ----- |
+| A | 1 |
+"""
+    chunk2 = """
+<!-- normalized-heading: ### Stats -->
+| Name | Value |
+| ---- | ----- |
+| B | 2 |
+"""
+
+    result = stitch_markdown([chunk1, chunk2], tiles)
+    output = result.markdown
+
+    assert output.count("| Name | Value |") == 1
+    assert "table-header-trimmed reason=identical" in output
+
+
 def test_dom_assist_overlays_low_confidence_line() -> None:
     tiles = [_tile(0, 0)]
     overlays = [DomTextOverlay(text="Revenue Q4", normalized="revenue q4", source="figcaption")]
@@ -129,3 +168,72 @@ def test_dom_assist_overlays_low_confidence_line() -> None:
 
     assert "Revenue Q4" in result.markdown
     assert result.dom_assists[0].reason == "punctuation"
+
+
+def test_dom_assist_hyphen_break_merges_lines() -> None:
+    tiles = [_tile(0, 0)]
+    overlay_text = "Revenue Growth"
+    overlays = [
+        DomTextOverlay(
+            text=overlay_text,
+            normalized=normalize_heading_text(overlay_text),
+            source="h2",
+        )
+    ]
+    chunk = "## Revenue-\n growth"
+
+    result = stitch_markdown([chunk], tiles, dom_overlays=overlays)
+
+    assert "## Revenue Growth" in result.markdown
+    assert "\n growth" not in result.markdown
+    assert result.dom_assists[0].reason == "hyphen-break"
+    assert "Revenue-" in result.dom_assists[0].original_text
+
+
+def test_dom_assist_preserves_list_prefix() -> None:
+    tiles = [_tile(0, 0)]
+    overlays = [DomTextOverlay(text="Revenue Growth", normalized="revenue growth", source="li")]
+    chunk = "- Revenue Growth???"
+
+    result = stitch_markdown([chunk], tiles, dom_overlays=overlays)
+
+    assert "- Revenue Growth" in result.markdown
+
+
+def test_dom_assist_queue_consumes_duplicate_normalized_entries() -> None:
+    tiles = [_tile(0, 0), _tile(1, 400)]
+    overlays = [
+        DomTextOverlay(text="Revenue Growth", normalized="revenue growth", source="h2"),
+        DomTextOverlay(text="Revenue Growth!!", normalized="revenue growth", source="h2"),
+    ]
+    chunks = ["## Revenue-\n growth", "## Revenue-\n growth"]
+
+    result = stitch_markdown(chunks, tiles, dom_overlays=overlays)
+
+    assert "Revenue Growth!!" in result.markdown
+    dom_texts = [entry.dom_text for entry in result.dom_assists]
+    assert dom_texts == ["Revenue Growth", "Revenue Growth!!"]
+
+
+def test_dom_assist_skips_code_fence_blocks() -> None:
+    tiles = [_tile(0, 0)]
+    overlays = [DomTextOverlay(text="Function foo", normalized="function foo", source="code")]
+    chunk = """```
+function foo???
+```"""
+
+    result = stitch_markdown([chunk], tiles, dom_overlays=overlays)
+
+    assert not result.dom_assists
+    assert "function foo???" in result.markdown
+
+
+def test_dom_assist_detects_spaced_letters() -> None:
+    tiles = [_tile(0, 0)]
+    overlays = [DomTextOverlay(text="Revenue", normalized="revenue", source="heading")]
+    chunk = "R e v e n u e"
+
+    result = stitch_markdown([chunk], tiles, dom_overlays=overlays)
+
+    assert "Revenue" in result.markdown
+    assert result.dom_assists[0].reason == "spaced-letters"

@@ -61,3 +61,5 @@ def test_snapshot_events_surface_dom_assist_summary():
     assert "dom_assist" in events
     summary = json.loads(events["dom_assist"])
     assert summary["count"] == 2
+    assert summary["reason_counts"][0]["count"] == 1
+    assert "reasons" in summary

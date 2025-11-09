@@ -24,6 +24,15 @@ def test_warnings_tail_json_includes_enriched_fields(tmp_path: Path, monkeypatch
             "overlap_match_ratio": 0.9,
         },
         "validation_failures": ["tile checksum mismatch", "tile decode failed"],
+        "seam_markers": {
+            "count": 3,
+            "unique_tiles": 2,
+            "unique_hashes": 2,
+            "sample": [
+                {"tile_index": 0, "position": "top", "hash": "abc111"},
+                {"tile_index": 1, "position": "bottom", "hash": "def222"},
+            ],
+        },
     }
     log_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
 
@@ -44,6 +53,7 @@ def test_warnings_tail_json_includes_enriched_fields(tmp_path: Path, monkeypatch
     assert "\"validation_failure_count\": 2" in result.output
     assert "sweep_summary" in result.output
     assert "overlap_match_ratio" in result.output
+    assert "seam_summary_text" in result.output
 
 
 def test_warnings_tail_pretty_output(tmp_path: Path, monkeypatch) -> None:
@@ -57,6 +67,12 @@ def test_warnings_tail_pretty_output(tmp_path: Path, monkeypatch) -> None:
         "blocklist_hits": {"#cookie": 1},
         "sweep_stats": {"shrink_events": 0, "retry_attempts": 0, "overlap_pairs": 2, "overlap_match_ratio": 0.95},
         "validation_failures": [],
+        "seam_markers": {
+            "count": 1,
+            "unique_tiles": 1,
+            "unique_hashes": 1,
+            "sample": [{"tile_index": 2, "position": "bottom", "hash": "xyz999"}],
+        },
     }
     log_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
 
@@ -73,8 +89,9 @@ def test_warnings_tail_pretty_output(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert result.exit_code == 0
-    assert "canvas-heavy" in result.output
-    assert "ratio=0.95" in result.output
+    assert "canvas-h" in result.output
+    assert "pairs=2" in result.output
+    assert "xyz999" in result.output
     assert "job-2" not in result.output  # ensures only run-2 shown once
 
 

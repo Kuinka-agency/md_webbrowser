@@ -217,6 +217,14 @@ class ManifestMetadata(BaseModel):
         default_factory=list,
         description="DOM overlays injected to repair low-confidence OCR spans",
     )
+    dom_assist_summary: dict[str, Any] | None = Field(
+        default=None,
+        description="Aggregated DOM-assist counts/reasons for quick diagnostics",
+    )
+    seam_markers: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Seam hash metadata keyed by tile index/position to trace stitched boundaries",
+    )
 
 
 class EmbeddingSearchRequest(BaseModel):

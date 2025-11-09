@@ -19,7 +19,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app import metrics
 from app.dom_links import blend_dom_with_ocr, demo_dom_links, demo_ocr_links, serialize_links
-from app.jobs import JobManager, JobSnapshot, JobState, build_signed_webhook_sender
+from app.jobs import JobManager, JobSnapshot, JobState, build_signed_webhook_sender, summarize_dom_assists
 from app.schemas import (
     EmbeddingSearchRequest,
     EmbeddingSearchResponse,
@@ -523,7 +523,8 @@ def _snapshot_events(snapshot: JobSnapshot) -> list[tuple[str, str]]:
                 events.append(("validation", json.dumps(validation_failures)))
             dom_assists = manifest.get("dom_assists")
             if isinstance(dom_assists, list) and dom_assists:
-                events.append(("dom_assist", json.dumps({"count": len(dom_assists)})))
+                summary = summarize_dom_assists(dom_assists) or {"count": len(dom_assists)}
+                events.append(("dom_assist", json.dumps(summary)))
             environment = manifest.get("environment")
             if isinstance(environment, dict):
                 env_data = cast(dict[str, Any], environment)

@@ -29,6 +29,8 @@ def _write_pointer_files(root: Path, *, include_weekly: bool = True, over_budget
             "total_ms": 2200,
             "sweep_stats": {"overlap_match_ratio": 0.9},
             "validation_failures": ["tile checksum mismatch"],
+            "seam_marker_count": 2,
+            "seam_hash_count": 2,
         },
         {
             "category": "apps",
@@ -54,6 +56,10 @@ def _write_pointer_files(root: Path, *, include_weekly: bool = True, over_budget
                     "budget_ms": 20000,
                     "capture_ms": {"p50": 11000, "p95": 15000},
                     "total_ms": {"p50": 19000, "p95": 26000 if over_budget else 18000},
+                    "seam_markers": {
+                        "count": {"p50": 1, "p95": 2},
+                        "hashes": {"p50": 1, "p95": 1},
+                    },
                 }
             ],
         }
@@ -101,6 +107,7 @@ def test_show_latest_smoke_respects_limit_and_no_summary(tmp_path: Path):
     assert "Aggregated Metrics" in output
     assert "overlap=0.90" in output
     assert "validation_failures=1" in output
+    assert "seams=2 hashes=2" in output
 
 
 def test_show_latest_smoke_weekly_highlights_over_budget(tmp_path: Path):
@@ -109,6 +116,7 @@ def test_show_latest_smoke_weekly_highlights_over_budget(tmp_path: Path):
     assert result.exit_code == 0
     assert "Weekly Summary" in result.output
     assert "⚠️ over budget" in result.output
+    assert "Seam markers p50/p95: 1/2" in result.output
 
 
 def test_show_latest_smoke_weekly_missing_file(tmp_path: Path):
@@ -136,8 +144,12 @@ def test_show_latest_smoke_json_output(tmp_path: Path):
     assert len(payload["manifest"]) == 1
     assert payload["manifest"][0]["overlap_match_ratio"] == 0.9
     assert payload["manifest"][0]["validation_failure_count"] == 1
+    assert payload["manifest"][0]["seam_marker_count"] == 2
+    assert payload["manifest"][0]["seam_hash_count"] == 2
     assert "metrics" in payload
     assert "weekly_summary" in payload
+    weekly_seams = payload["weekly_summary"]["categories"][0]["seam_markers"]
+    assert weekly_seams["count"]["p95"] == 2
 
 
 def test_show_latest_smoke_manifest_missing(tmp_path: Path):

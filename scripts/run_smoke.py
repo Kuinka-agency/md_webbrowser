@@ -63,6 +63,8 @@ class RunRecord:
     capture_ms: int | None
     total_ms: int | None
     timings: dict[str, Any] | None
+    seam_marker_count: int | None = None
+    seam_hash_count: int | None = None
 
 
 def _ensure_date_dir(date_str: str) -> Path:
@@ -92,9 +94,11 @@ def _slug_from_url(url_entry: dict[str, str]) -> str:
     return sanitized or "job"
 
 
-def _manifest_metrics(manifest_path: Path) -> tuple[int | None, int | None, dict[str, Any] | None]:
+def _manifest_metrics(
+    manifest_path: Path,
+) -> tuple[int | None, int | None, dict[str, Any] | None, int | None, int | None]:
     if not manifest_path.exists():
-        return None, None, None
+        return None, None, None, None, None
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     timings = manifest.get("timings") or {}
     capture_ms = timings.get("capture_ms")
@@ -102,7 +106,19 @@ def _manifest_metrics(manifest_path: Path) -> tuple[int | None, int | None, dict
     if total_ms is None:
         partials = [timings.get(key) for key in ("capture_ms", "ocr_ms", "stitch_ms")]
         total_ms = sum(value for value in partials if value is not None)
-    return capture_ms, total_ms, timings
+    seam_marker_count: int | None = None
+    seam_hash_count: int | None = None
+    seam_markers = manifest.get("seam_markers")
+    if isinstance(seam_markers, list) and seam_markers:
+        seam_marker_count = len(seam_markers)
+        seam_hashes = {
+            entry.get("hash")
+            for entry in seam_markers
+            if isinstance(entry, dict) and isinstance(entry.get("hash"), str)
+        }
+        seam_hashes.discard(None)
+        seam_hash_count = len(seam_hashes) if seam_hashes else None
+    return capture_ms, total_ms, timings, seam_marker_count, seam_hash_count
 
 
 def run_category(
@@ -132,7 +148,13 @@ def run_category(
             timeout_s=timeout_s,
         )
         manifest_path = result.output_dir / "manifest.json"
-        capture_ms, total_ms, timings = _manifest_metrics(manifest_path)
+        (
+            capture_ms,
+            total_ms,
+            timings,
+            seam_marker_count,
+            seam_hash_count,
+        ) = _manifest_metrics(manifest_path)
         results.append(
             RunRecord(
                 category=category.name,
@@ -145,6 +167,8 @@ def run_category(
                 capture_ms=capture_ms,
                 total_ms=total_ms,
                 timings=timings,
+                seam_marker_count=seam_marker_count,
+                seam_hash_count=seam_hash_count,
             )
         )
     return results
@@ -210,8 +234,9 @@ def run_category_dry(category: Category, out_dir: Path, seed: int | None = None)
 
 
 def write_manifest_index(date_dir: Path, records: list[RunRecord]) -> Path:
-    payload = [
-        {
+    payload: list[dict[str, Any]] = []
+    for record in records:
+        entry = {
             "category": record.category,
             "budget_ms": record.budget_ms,
             "slug": record.slug,
@@ -224,8 +249,11 @@ def write_manifest_index(date_dir: Path, records: list[RunRecord]) -> Path:
             "timings": record.timings,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
-        for record in records
-    ]
+        if record.seam_marker_count is not None:
+            entry["seam_marker_count"] = record.seam_marker_count
+        if record.seam_hash_count is not None:
+            entry["seam_hash_count"] = record.seam_hash_count
+        payload.append(entry)
     index_path = date_dir / "manifest_index.json"
     index_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return index_path
@@ -357,22 +385,36 @@ def update_weekly_summary(config: dict[str, Any], window_days: int = 7) -> None:
     for category, entries in sorted(metrics.items()):
         capture_values = [entry["capture_ms"] for entry in entries if entry.get("capture_ms") is not None]
         total_values = [entry["total_ms"] for entry in entries if entry.get("total_ms") is not None]
+        seam_counts = [entry.get("seam_marker_count") for entry in entries if isinstance(entry.get("seam_marker_count"), (int, float))]
+        seam_hash_counts = [entry.get("seam_hash_count") for entry in entries if isinstance(entry.get("seam_hash_count"), (int, float))]
         budget = budgets.get(category)
-        categories_summary.append(
-            {
-                "name": category,
-                "runs": len(entries),
-                "budget_ms": budget,
-                "capture_ms": {
-                    "p50": _percentile(capture_values, 0.5),
-                    "p95": _percentile(capture_values, 0.95),
-                },
-                "total_ms": {
-                    "p50": _percentile(total_values, 0.5),
-                    "p95": _percentile(total_values, 0.95),
-                },
+        category_entry: dict[str, Any] = {
+            "name": category,
+            "runs": len(entries),
+            "budget_ms": budget,
+            "capture_ms": {
+                "p50": _percentile(capture_values, 0.5),
+                "p95": _percentile(capture_values, 0.95),
+            },
+            "total_ms": {
+                "p50": _percentile(total_values, 0.5),
+                "p95": _percentile(total_values, 0.95),
+            },
+        }
+        seam_block: dict[str, Any] = {}
+        if seam_counts:
+            seam_block["count"] = {
+                "p50": _percentile(seam_counts, 0.5),
+                "p95": _percentile(seam_counts, 0.95),
             }
-        )
+        if seam_hash_counts:
+            seam_block["hashes"] = {
+                "p50": _percentile(seam_hash_counts, 0.5),
+                "p95": _percentile(seam_hash_counts, 0.95),
+            }
+        if seam_block:
+            category_entry["seam_markers"] = seam_block
+        categories_summary.append(category_entry)
 
     WEEKLY_SUMMARY_PATH.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 

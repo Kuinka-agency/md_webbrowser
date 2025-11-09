@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import difflib
 import re
@@ -12,6 +13,13 @@ from app.dom_links import DomHeading, DomTextOverlay, normalize_heading_text
 from app.tiler import TileSlice
 
 _HEADING_RE = re.compile(r"^(#{1,6})(\s+.+)")
+_HEADING_PREFIX_RE = re.compile(r"^\s*(?:>+\s*)*(?:#{1,6}\s+)")
+_ORDERED_LIST_PREFIX_RE = re.compile(r"^\s*(?:>+\s*)*(?:\d+\.\s+)")
+_UNORDERED_LIST_PREFIX_RE = re.compile(r"^\s*(?:>+\s*)*(?:[-+*]\s+)")
+_BLOCKQUOTE_PREFIX_RE = re.compile(r"^\s*>+\s*")
+_LEADING_WS_RE = re.compile(r"^\s+")
+_SPACED_LETTERS_RE = re.compile(r"(?:[A-Za-z]\s+){3,}[A-Za-z]")
+_CODE_FENCE_PREFIXES = ("```", "~~~")
 
 
 @dataclass(slots=True)
@@ -56,15 +64,24 @@ class HeadingGuide:
 
 class DomOverlayIndex:
     def __init__(self, overlays: Sequence[DomTextOverlay] | None) -> None:
-        self._map: dict[str, DomTextOverlay] = {}
+        self._map: dict[str, deque[DomTextOverlay]] = {}
         if overlays:
             for entry in overlays:
-                self._map.setdefault(entry.normalized, entry)
+                if not entry.normalized:
+                    continue
+                queue = self._map.setdefault(entry.normalized, deque())
+                queue.append(entry)
 
     def lookup(self, normalized: str) -> DomTextOverlay | None:
         if not normalized:
             return None
-        return self._map.get(normalized)
+        queue = self._map.get(normalized)
+        if not queue:
+            return None
+        overlay = queue.popleft()
+        if not queue:
+            self._map.pop(normalized, None)
+        return overlay
 
 
 def stitch_markdown(
@@ -117,8 +134,8 @@ def stitch_markdown(
         if table_trim:
             processed.append(_format_table_trim_comment(table_trim))
 
-        body = "\n".join(lines).strip()
-        if body:
+        body = "\n".join(lines).strip("\n")
+        if body and body.strip():
             processed.append(body)
         previous_tile = tile if tile else previous_tile
 
@@ -174,16 +191,21 @@ def _trim_duplicate_table_header(
 ) -> tuple[list[str], str | None, TrimmedHeaderInfo | None]:
     """Drop repeated Markdown table header rows emitted across tiles."""
 
-    header_signature = _extract_table_header_signature(lines)
-    if not header_signature:
+    extraction = _extract_table_header_signature(lines)
+    if not extraction:
         return lines, last_signature, None
+
+    header_signature, header_start = extraction
+    header_end = header_start + 2
+    prefix = lines[:header_start]
+    suffix = lines[header_end:]
 
     overlap_match = _tiles_share_overlap(prev_tile, tile)
     identical = header_signature == last_signature and overlap_match
     trimmed_info: TrimmedHeaderInfo | None = None
 
     if identical:
-        trimmed = lines[2:]
+        trimmed = prefix + suffix
         trimmed_info = TrimmedHeaderInfo(reason="identical")
         return trimmed, header_signature, trimmed_info
 
@@ -191,23 +213,47 @@ def _trim_duplicate_table_header(
     if overlap_match and last_signature:
         similarity = _header_similarity(header_signature, last_signature)
         if similarity >= 0.92:
-            trimmed = lines[2:]
+            trimmed = prefix + suffix
             trimmed_info = TrimmedHeaderInfo(reason="similar", similarity=similarity)
             return trimmed, header_signature, trimmed_info
 
     return lines, header_signature, None
 
 
-def _extract_table_header_signature(lines: list[str]) -> str | None:
-    if len(lines) < 2:
+def _extract_table_header_signature(lines: list[str]) -> tuple[str, int] | None:
+    start = _locate_table_header_start(lines)
+    if start is None or start + 1 >= len(lines):
         return None
-    header = lines[0].strip()
-    separator = lines[1].strip()
+    header = lines[start].strip()
+    separator = lines[start + 1].strip()
     if "|" not in header or "|" not in separator:
         return None
     if "---" not in separator:
         return None
-    return f"{header}\n{separator}"
+    signature = f"{header}\n{separator}"
+    return signature, start
+
+
+def _locate_table_header_start(lines: list[str]) -> int | None:
+    idx = 0
+    limit = len(lines) - 1
+    while idx < limit:
+        stripped = lines[idx].strip()
+        if not stripped:
+            idx += 1
+            continue
+        if _is_inline_comment(stripped):
+            idx += 1
+            continue
+        next_line = lines[idx + 1].strip()
+        if "|" in stripped and "|" in next_line and "---" in next_line:
+            return idx
+        return None
+    return None
+
+
+def _is_inline_comment(line: str) -> bool:
+    return line.startswith("<!--") and line.endswith("-->")
 
 
 def _header_similarity(sig_a: str, sig_b: str) -> float:
@@ -217,18 +263,25 @@ def _header_similarity(sig_a: str, sig_b: str) -> float:
 def _tiles_share_overlap(prev_tile: TileSlice | None, tile: TileSlice | None) -> bool:
     if not prev_tile or not tile:
         return False
-    if not prev_tile.bottom_overlap_sha256 or not tile.top_overlap_sha256:
-        return False
-    return prev_tile.bottom_overlap_sha256 == tile.top_overlap_sha256
+    if prev_tile.bottom_overlap_sha256 and tile.top_overlap_sha256:
+        return prev_tile.bottom_overlap_sha256 == tile.top_overlap_sha256
+    if prev_tile.seam_bottom_hash and tile.seam_top_hash:
+        return prev_tile.seam_bottom_hash == tile.seam_top_hash
+    return False
 
 
 def _format_seam_marker(prev_tile: TileSlice, tile: TileSlice) -> str:
     overlap_hash = prev_tile.bottom_overlap_sha256 or tile.top_overlap_sha256 or "unknown"
-    return (
-        "<!-- seam-marker: "
-        f"prev=tile_{prev_tile.index:04d}, curr=tile_{tile.index:04d}, overlap_hash={overlap_hash}"
-        " -->"
-    )
+    parts = [
+        "<!-- seam-marker:",
+        f"prev=tile_{prev_tile.index:04d}",
+        f"curr=tile_{tile.index:04d}",
+        f"overlap_hash={overlap_hash}",
+    ]
+    if prev_tile.seam_bottom_hash and tile.seam_top_hash:
+        parts.append(f"seam_hash={prev_tile.seam_bottom_hash}")
+    parts.append("-->")
+    return " ".join(parts)
 
 
 def _format_provenance(tile: TileSlice, *, job_id: str | None = None) -> str:
@@ -264,26 +317,66 @@ def _apply_dom_overlays(
 ) -> tuple[list[str], list[DomAssistEntry]]:
     updated: list[str] = []
     assists: list[DomAssistEntry] = []
+    skip_next = False
+    in_code_fence = False
+    code_delimiter: str | None = None
     for line_idx, line in enumerate(lines):
+        if skip_next:
+            skip_next = False
+            continue
+        stripped_line = line.strip()
+        fence = _detect_code_fence(stripped_line)
+        if fence:
+            if in_code_fence and fence == code_delimiter:
+                in_code_fence = False
+                code_delimiter = None
+            else:
+                in_code_fence = True
+                code_delimiter = fence
+            updated.append(line)
+            continue
+        if in_code_fence or _is_indented_code_block(line):
+            updated.append(line)
+            continue
         next_line = lines[line_idx + 1] if line_idx + 1 < len(lines) else None
         reason = _line_issue(line, next_line)
         if reason:
-            stripped = line.lstrip("# ")
-            normalized = normalize_heading_text(stripped)
-            overlay = overlay_index.lookup(normalized)
-            if overlay:
-                replacement = _merge_overlay(line, overlay.text)
-                updated.append(replacement)
-                assists.append(
-                    DomAssistEntry(
-                        tile_index=tile_index,
-                        line=line_idx,
-                        reason=reason,
-                        dom_text=overlay.text,
-                        original_text=line.strip(),
+            stripped = line.lstrip("# ").strip()
+            normalized = ""
+            consume_next = False
+            original_text = line.strip()
+            if stripped:
+                if reason == "hyphen-break" and next_line:
+                    suffix = next_line.lstrip()
+                    combined = f"{stripped.rstrip('-')} {suffix}".strip()
+                    normalized = normalize_heading_text(combined)
+                    consume_next = bool(suffix)
+                    original_tail = next_line.strip()
+                    if original_tail:
+                        original_text = f"{original_text} {original_tail}".strip()
+                else:
+                    if reason == "spaced-letters":
+                        stripped_candidate = re.sub(r"\s+", "", stripped)
+                        normalized = normalize_heading_text(stripped_candidate)
+                    else:
+                        normalized = normalize_heading_text(stripped)
+            if normalized:
+                overlay = overlay_index.lookup(normalized)
+                if overlay:
+                    replacement = _merge_overlay(line, overlay.text)
+                    updated.append(replacement)
+                    assists.append(
+                        DomAssistEntry(
+                            tile_index=tile_index,
+                            line=line_idx,
+                            reason=reason,
+                            dom_text=overlay.text,
+                            original_text=original_text,
+                        )
                     )
-                )
-                continue
+                    if consume_next:
+                        skip_next = True
+                    continue
         updated.append(line)
     return updated, assists
 
@@ -294,6 +387,8 @@ def _line_issue(line: str, next_line: str | None) -> str | None:
         return None
     if "�" in stripped:
         return "replacement-char"
+    if _SPACED_LETTERS_RE.search(stripped):
+        return "spaced-letters"
     noisy = sum(1 for char in stripped if char in "!?…")
     if noisy >= 3:
         return "punctuation"
@@ -303,18 +398,25 @@ def _line_issue(line: str, next_line: str | None) -> str | None:
     ratio = alpha / max(1, len(stripped))
     if ratio < 0.45 and len(stripped) >= 6:
         return "low-alpha"
-    if stripped.endswith("-") and next_line and next_line[:1].islower():
-        return "hyphen-break"
+    if stripped.endswith("-") and next_line:
+        next_token = next_line.lstrip()[:1]
+        if next_token.islower():
+            return "hyphen-break"
     return None
 
 
 def _merge_overlay(line: str, dom_text: str) -> str:
-    prefix = ""
-    stripped = line.lstrip()
-    if stripped.startswith("#"):
-        hashes, _, remainder = stripped.partition(" ")
-        prefix = f"{hashes} "
+    prefix = _extract_markdown_prefix(line)
     return f"{prefix}{dom_text}"
+
+
+def _extract_markdown_prefix(line: str) -> str:
+    for pattern in (_HEADING_PREFIX_RE, _ORDERED_LIST_PREFIX_RE, _UNORDERED_LIST_PREFIX_RE, _BLOCKQUOTE_PREFIX_RE):
+        match = pattern.match(line)
+        if match:
+            return match.group(0)
+    whitespace = _LEADING_WS_RE.match(line)
+    return whitespace.group(0) if whitespace else ""
 
 
 def _format_dom_assist_comment(entry: DomAssistEntry) -> str:
@@ -329,3 +431,27 @@ def _format_table_trim_comment(info: TrimmedHeaderInfo) -> str:
     if info.similarity is not None:
         parts.append(f"similarity={info.similarity:.2f}")
     return f"<!-- {' '.join(parts)} -->"
+
+
+def _detect_code_fence(line: str) -> str | None:
+    if not line:
+        return None
+    for prefix in _CODE_FENCE_PREFIXES:
+        if line.startswith(prefix):
+            return prefix
+    return None
+
+
+def _is_indented_code_block(line: str) -> bool:
+    if not line:
+        return False
+    if line.startswith("\t"):
+        return True
+    if line.startswith("    "):
+        stripped = line.lstrip()
+        if stripped.startswith(("-", "*", "+")):
+            return False
+        if re.match(r"\d+\.", stripped):
+            return False
+        return True
+    return False

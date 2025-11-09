@@ -99,6 +99,7 @@ Publish the summary in Monday’s ops update and attach the most recent
   are still streaming.
 - **OCR throttling**: temporarily reduce `OCR_MAX_CONCURRENCY` in `.env` and rerun,
   then notify the hosted OCR contact listed in `docs/olmocr_cli.md`.
+- **Seam debugging**: viewport sweeps include hashed watermark lines at the top/bottom edges; the resulting `seam_hash` in Markdown/CLI output should match for adjacent tiles. Mismatches usually indicate capture scroll glitches.
 
 ## OCR concurrency autotune
 - The OCR client now adjusts concurrency dynamically inside each job. It starts at `OCR_MIN_CONCURRENCY`, scales up when back-to-back batches stay under ~3.5 s with no retries, and throttles immediately on 408/429/5xx responses, retries, or >7 s latency.
@@ -158,17 +159,20 @@ automation; prefer calling `check_metrics.py` directly.
 - Optional automation toggles:
   - `MDWB_CHECK_METRICS=1` (and optionally `CHECK_METRICS_TIMEOUT=<seconds>`) appends the Prometheus probe after
     the lint/type/pytest/Playwright stages so CI mirrors manual smoke commands.
-  - `MDWB_RUN_E2E=1` runs the richer CLI end-to-end suite (`tests/test_e2e_cli.py`) after the standard pytest subset
-    so pipelines can opt into the heavier coverage when needed.
+  - `MDWB_RUN_E2E=1` runs the lightweight sentinel suite in `tests/test_e2e_small.py`.
+  - `MDWB_RUN_E2E_RICH=1` runs the FlowLogger-heavy `tests/test_e2e_cli.py` scenarios and copies the transcript artifacts into
+    `tmp/rich_e2e_cli/` (override with `RICH_E2E_ARTIFACT_DIR=/path/to/dir`) so operators can grab the `.log`/`.html` panels from CI artifacts.
+  - `MDWB_RUN_E2E_GENERATED=1` runs the generative guardrail suite (`tests/test_e2e_generated.py`). Override `MDWB_GENERATED_E2E_CASES`
+    when you need to point at a custom cases file (e.g., regenerated Markdown baselines).
 - If legacy pipelines still call `scripts/prom_scrape_check.py`, they automatically inherit the latest CLI flags
   (including `--json` and exporter overrides). Document the wrapper usage in release notes whenever the CLI contract shifts.
 - For ad-hoc diagnostics, `scripts/prom_scrape_check.py` is a backward-compatible wrapper around the same Typer CLI, so legacy automation can still invoke the check without code changes.
 - CI/automation can set `MDWB_CHECK_METRICS=1` (plus `CHECK_METRICS_TIMEOUT` if needed) before
   running `scripts/run_checks.sh` to run the same health check after the pytest/Playwright stack.
-- Set `MDWB_RUN_E2E=1` in CI/nightly jobs when you want `run_checks.sh` to execute `tests/test_e2e_cli.py` after the
-  existing CLI subset; keep it unset for faster iterations. The E2E suite emits FlowLogger panels (Rich tables) that
-  summarize each step; when running in CI, capture `run_checks` stdout so on-call engineers can review the panels
-  alongside pytest logs.
+- Set `MDWB_RUN_E2E=1` in CI/nightly jobs when you need the fast sentinel.
+- Set `MDWB_RUN_E2E_RICH=1` (and optionally `RICH_E2E_ARTIFACT_DIR=tmp/rich_e2e_cli`) whenever you want the FlowLogger suite to run; the exported `.log`/`.html`
+  transcripts under `tmp/rich_e2e_cli/` contain the Panels/Tables/Progress output described in PLAN §14.2, so attach that directory to build artifacts for easy debugging.
+- Use `MDWB_RUN_E2E_GENERATED=1` alongside `MDWB_GENERATED_E2E_CASES=/path/to/cases.json` when validating refreshed Markdown baselines for the generative guardrail tests.
 
 Tie the new counters into `ops/dashboards.json`/`ops/alerts.md` so Grafana can page when
 warning spikes, job failures, or SSE stalls exceed their budgets.

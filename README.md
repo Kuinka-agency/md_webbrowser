@@ -104,7 +104,14 @@ npx playwright test --config=playwright.config.mjs  # or PLAYWRIGHT_BIN=/path/to
 `./scripts/run_checks.sh` wraps the same sequence for CI. Set `PLAYWRIGHT_BIN=/path/to/playwright-test`
 if you need to invoke the Node-based runner; otherwise the script prefers `npx playwright test --config=playwright.config.mjs`
 (which inherits the defaults from PLAN/AGENTS: viewport 1280×2000, DPR 2, reduced motion, light scheme, mask selectors, CDP/BiDi transport via `PLAYWRIGHT_TRANSPORT`). When Node Playwright isn’t installed it falls back to `uv run playwright test` and prints a warning if the Python CLI lacks `test`.
-When you already know libvips isn’t available in a minimal container, export `SKIP_LIBVIPS_CHECK=1` to bypass the preflight warning. Set `MDWB_CHECK_METRICS=1` (optionally `CHECK_METRICS_TIMEOUT=<seconds>`) to append the Prometheus health check. To run the rich CLI E2E suite locally/CI, set `MDWB_RUN_E2E=1` so `run_checks.sh` executes `tests/test_e2e_cli.py` after the standard subset; the run emits FlowLogger tables so grab the `run_checks` log in CI for postmortems.
+When you already know libvips isn’t available in a minimal container, export `SKIP_LIBVIPS_CHECK=1` to bypass the preflight warning. Optional toggles inside `scripts/run_checks.sh`:
+
+- `MDWB_CHECK_METRICS=1` (optionally `CHECK_METRICS_TIMEOUT=<seconds>`) appends the Prometheus health check after pytest/Playwright.
+- `MDWB_RUN_E2E=1` runs the lightweight placeholder suite in `tests/test_e2e_small.py` so CI can keep a fast E2E sentinel without invoking FlowLogger.
+- `MDWB_RUN_E2E_RICH=1` runs the full FlowLogger scenarios in `tests/test_e2e_cli.py`; transcript artifacts are copied to `tmp/rich_e2e_cli/` (override via `RICH_E2E_ARTIFACT_DIR=/path/to/dir`) so operators can review the panels/tables/progress output without hunting through pytest temp dirs.
+- `MDWB_RUN_E2E_GENERATED=1` runs the generative guardrail suite (`tests/test_e2e_generated.py`). Point `MDWB_GENERATED_E2E_CASES=/path/to/cases.json` at a bespoke cases file when you need to refresh or extend the Markdown baselines.
+
+Grab the resulting `tmp/rich_e2e_cli/*.log|*.html` files in CI for postmortems.
 
 - The bundled pytest targets now include the store/manifest persistence suite (`tests/test_store_manifest.py`, `tests/test_manifest_contract.py`),
   the Prometheus CLI health checks (`tests/test_check_metrics.py`), and the ops regressions for `show_latest_smoke`/`update_smoke_pointers` in addition
@@ -196,5 +203,6 @@ Use `mdwb jobs bundle …` or `mdwb jobs artifacts manifest …` (or `/jobs/{id}
 - **Warning log explosions:** Tail `uv run python scripts/mdwb_cli.py warnings --count 100 --json` and look for repeated warning codes (canvas-heavy, scroll-shrink); the JSON output now includes `validation_failure_count`, `overlap_match_ratio`, and `sweep_summary` to speed up dashboard ingestion. Update `docs/blocklist.md` / selectors if overlays broke capture.
 - **SSE disconnects:** The UI should show an SSE health badge; check `/jobs/{id}/events` NDJSON output via `mdwb events --follow` to ensure the backend is still emitting. If not, inspect `app/jobs.py` logs for heartbeat gaps.
 - **Manifest missing links/DOM snapshots:** Ensure the capture job has write access to `CACHE_ROOT`; the Store will refuse to emit `/jobs/{id}/links.json` when the DOM snapshot can’t be written.
+- **Seam alignment questions:** Each viewport sweep now draws a subtle watermark line at the top/bottom edge; the resulting seam hashes (`seam_hash=…` in Markdown provenance) plus `mdwb diag --ocr-metrics` output help confirm adjacent tiles align correctly.
 
 Questions? Start a bead, announce it via Agent Mail, and keep PLAN/README/doc updates in lockstep.

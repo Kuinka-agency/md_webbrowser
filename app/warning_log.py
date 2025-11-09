@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import json
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from app.schemas import ManifestWarning
 from app.settings import get_settings
@@ -44,6 +44,7 @@ def append_warning_log(
     overlap_ratio = getattr(manifest, "overlap_match_ratio", None)
     if overlap_ratio is None and sweep_stats:
         overlap_ratio = sweep_stats.get("overlap_match_ratio")
+    seam_summary = _summarize_seam_markers(getattr(manifest, "seam_markers", None))
 
     should_log = bool(warnings or blocklist_hits or validation_failures)
     if not should_log and sweep_stats:
@@ -82,6 +83,8 @@ def append_warning_log(
         record["overlap_match_ratio"] = overlap_ratio
     if validation_failures:
         record["validation_failures"] = validation_failures
+    if seam_summary:
+        record["seam_markers"] = seam_summary
 
     log_path = settings.logging.warning_log_path
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,3 +108,36 @@ def _coerce_mapping(value: Any) -> dict[str, Any] | None:
         except Exception:  # pragma: no cover - defensive
             return None
     return None
+
+
+def _summarize_seam_markers(markers: Any, *, sample_limit: int = 3) -> dict[str, Any] | None:
+    if not isinstance(markers, Sequence):
+        return None
+    normalized: list[dict[str, Any]] = []
+    tile_ids: set[int] = set()
+    hashes: set[str] = set()
+    for entry in markers:
+        if not isinstance(entry, Mapping):
+            continue
+        item: dict[str, Any] = {}
+        tile_index = entry.get("tile_index")
+        if isinstance(tile_index, int):
+            item["tile_index"] = tile_index
+            tile_ids.add(tile_index)
+        position = entry.get("position")
+        if isinstance(position, str):
+            item["position"] = position
+        seam_hash = entry.get("hash")
+        if isinstance(seam_hash, str):
+            item["hash"] = seam_hash
+            hashes.add(seam_hash)
+        normalized.append(item)
+    if not normalized:
+        return None
+    sample = normalized[:sample_limit]
+    return {
+        "count": len(normalized),
+        "unique_tiles": len(tile_ids) or None,
+        "unique_hashes": len(hashes) or None,
+        "sample": sample,
+    }

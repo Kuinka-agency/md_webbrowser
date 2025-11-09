@@ -306,8 +306,8 @@ _2025-11-08 — PinkLake (bd-4dq follow-up) added `mdwb resume status` so agents
 _2025-11-08 — RedSnow (bd-oez) fixed `mdwb resume status` to list only completed entries (previously showed every backlog entry) and added unit tests covering the filtered output + ResumeManager helpers._
 _2025-11-08 — RedSnow (bd-742) extended `mdwb resume status` with `--pending/--no-pending` plus JSON fields (`completed_entries`, `pending_entries`) so ops tooling can see outstanding URLs in both text and machine-readable form._
 _2025-11-08 — RedSnow (bd-dex) added `--out` support to the new agent starter scripts (summaries + TODOs) so automations can persist results; README/docs stayed in sync and pytest now covers the new flag._
-_2025-11-08 — RedSnow (bd-3aa) added the `MDWB_RUN_E2E=1` toggle to `scripts/run_checks.sh` so teams can optionally run `tests/test_e2e_cli.py` after the standard pytest subset; README/docs/ops now document the flag alongside `MDWB_CHECK_METRICS`._
-_2025-11-08 — RedSnow (bd-5q6) documented the rich CLI FlowLogger output + `MDWB_RUN_E2E` usage in README/docs/ops so ops/CI know how to capture the panels/logs when the suite runs._
+_2025-11-08 — RedSnow (bd-3aa) added the original `MDWB_RUN_E2E=1` toggle to `scripts/run_checks.sh` so teams could optionally run `tests/test_e2e_cli.py` after the standard pytest subset; this now serves as the lightweight sentinel suite with the new `MDWB_RUN_E2E_RICH` flag driving the FlowLogger scenarios._
+_2025-11-08 — RedSnow (bd-5q6) documented the rich CLI FlowLogger output + toggle usage in README/docs/ops so ops/CI knew how to capture the panels/logs when the suite ran; those docs now point at `MDWB_RUN_E2E_RICH` following the bd-rlp changes._
 _2025-11-08 — RedSnow (bd-4zy) expanded ops pytest coverage (update_smoke_pointers env/root behavior, show_latest_smoke failure/JSON paths, check_metrics console timing) and wired the new tests into `scripts/run_checks.sh` so ops tooling regressions surface in CI. WhiteDog followed up with additional show_latest_smoke JSON-pointer tests + check_metrics summary assertions and synced README/docs accordingly._
 _2025-11-08 — WhiteDog (bd-4zy follow-up) added missing pointer/weekly JSON tests for `scripts/show_latest_smoke.py`, ensured `README.md`/`docs/ops.md` describe the new `--json` outputs and pytest summary artifacts emitted by `scripts/run_checks.sh`, and added JSON-summary coverage to `tests/test_check_metrics.py` so `total_duration_ms` matches per-target timings._
 _2025-11-08 — PinkLake (bd-4dq) added optional session reuse to the mdwb CLI (`--reuse-session`) and wired the agent starter scripts to reuse a single HTTP client by default so submit/poll/fetch no longer renegotiate TLS/H2 for every phase._
@@ -506,7 +506,7 @@ _2025-11-08 — ChartreuseCastle (bd-ptest-prom/bd-ptest-store/bd-ptest-ops) sta
 - **Perf:** p50/p95 timings, retries ≤2 per tile, memory footprint below threshold on 10k px pages.
 - **New guards:** CfT pinning test, viewport sweep regression (full-page omission repro), table split fuzzer, scroll stabilization harness.
 - **Generative E2E guardrail:** every major feature must have at least one GenIA-E2ETest (or comparable LLM-generated) scenario that exercises scrolling, tiling, OCR, stitching, and manifest logging end-to-end. Keep fixtures for these tests under `tests/test_e2e_generated.py` and fail CI when the Markdown diff exceeds 2%.
-- **Rich-logged integration suites:** add `tests/test_e2e_cli.py` scenarios that exercise CLI + agent workflows with `rich` panels/tables/syntax highlighting so each step logs inputs, invoked helpers, and outputs. These tests should: (a) print the URL/resume root/webhook targets via `rich.Panel`, (b) describe the feature under test (“mdwb fetch --resume”, “scripts/agents/summarize_article”, etc.) with the internal functions being exercised, (c) capture outputs/results (manifest paths, warning stats, webhook payloads) in tables, and (d) emit a final summary panel with timings, exit codes, and artifact directories. Hook these suites into `scripts/run_checks.sh` (behind `MDWB_CHECK_METRICS` or a similar env toggle) so ops can chase regressions with the same annotated breadcrumbs they’d expect in production.
+- **Rich-logged integration suites (§14.2):** add `tests/test_e2e_cli.py` scenarios that exercise CLI + agent workflows with `rich` panels/tables/syntax highlighting so each step logs inputs, invoked helpers, and outputs (see §14.2 for logging primitives, scenario list, and automation requirements). Hook these suites into `scripts/run_checks.sh` (behind `MDWB_CHECK_METRICS` or a similar env toggle) so ops can chase regressions with the same annotated breadcrumbs they’d expect in production.
 
 _2025-11-08 — RedBear (bd-hki) opened a bead for the missing GenIA guardrail suite (`tests/test_e2e_generated.py`) + run_checks toggle mentioned above._
 
@@ -538,6 +538,36 @@ When adding code to these areas:
 - **bd-ptest-prom** — Keep `tests/test_check_metrics.py` aligned with telemetry changes (flags, JSON output, exporter overrides) and tie the bead to PLAN §20 telemetry requirements.
 - **bd-ptest-reporting** — Add a CI summary step (or ensure Agent Mail templates) that links to pytest logs / coverage deltas whenever run_checks fails, so operators know which area regressed.
 
+### 14.2 Rich-Logged CLI + Agent Integration Suites
+
+_2025-11-09 — PurpleBear (bd-rle/bd-rlc/bd-rlp) added this section to formalize the “rich-logged” CLI/agent scenarios so test artifacts mirror the ops dashboards._
+
+**Logging primitives (enforced per scenario)**
+- Use a dedicated `rich.console.Console(record=True, width=120)` fixture so pytest can assert on `console.export_text()`/`export_html()` while still streaming to stdout during local runs.
+- Wrap every phase (`Step 1 — Inputs`, `Step 2 — Invocation`, `Step 3 — Results`) in `rich.panel.Panel.fit(...)` blocks. Inputs must highlight the CLI command/kwargs with `rich.syntax.Syntax` (language=`bash` for CLI, `python` for Typer helpers) so reviewers see the exact invocation.
+- Summarize intermediate artifacts via `rich.table.Table` with columns `field`, `value`, `source`. Include manifest paths, resume roots, webhook payload IDs, warning counts, helper names, and elapsed milliseconds.
+- Log helper/function boundaries explicitly (`_resume_capture`, `agents.shared._submit_job`, `_stream_job`) inside a `Panel` or `rich.text.Text` styled with `bold magenta` so ops can map logs to code quickly.
+- Close each scenario with a summary panel plus a `rich.progress.Progress` snapshot that shows per-step durations and cumulative runtime. Include exit codes and artifact directories in this footer.
+
+**Scenario coverage (live in `tests/test_e2e_cli.py` unless noted)**
+1. `mdwb fetch --resume --webhook-url …`: stub the HTTP client + webhook sender, log every request/response pair, and assert that the summary panel enumerates the job UUID, manifest path, warning tally, and webhook retry decisions.
+2. Agent starter script loop (`scripts/agents/summarize_article.py` + `scripts/agents/shared.py`): run via Typer’s `CliRunner`, log the URL, profile_id reuse, section extraction stats, and Markdown excerpt (use `rich.syntax.Syntax` with language=`markdown`). Capture both successful reuse and forced recapture paths.
+3. Warning + diag combo: chain `mdwb warnings tail --json` with `mdwb diag manifest`. Log warning codes, thresholds, SSIM overlap metrics, and diag verdicts in the shared table so ops can tie anomalies to manifest IDs.
+4. Stretch goal: add a capture pipeline dry-run that exercises `mdwb fetch --dry-run` followed by `scripts/olmocr_cli.py run --dry-run`, ensuring the logs highlight synthetic manifest roots and tile counts.
+
+**Automation + artifacts**
+- Gate execution behind `MDWB_RUN_E2E_RICH=1` (default off) in `scripts/run_checks.sh`. When enabled, run the suite immediately after the CLI pytest matrix but before Prometheus/exporter or Playwright smoke steps.
+- Emit both text and HTML transcripts at `tmp/rich_e2e_cli.log` / `tmp/rich_e2e_cli.html` so Agent Mail beads and dashboards can deep-link to a stable artifact.
+- Record the current logging template hash (`RICH_E2E_TEMPLATE=v1`) inside the summary panel and propagate it into `manifest.environment.rich_logging_hash` so capture manifests + test runs can be correlated.
+- Document the suite in README §9 + docs/ops §9, including the env toggle, artifact paths, and usage instructions for ops/qa.
+
+Success criteria: tests must assert on both functional outcomes (CLI behavior, stub invocations) and the presence/ordering of `Panel/Table/Syntax/Progress` blocks. Missing rich elements should fail fast to keep the logging contract enforceable.
+
+_2025-11-09 — PurpleBear (bd-rle) implemented FlowLogger v2 + the `mdwb fetch --resume --webhook` scenario with transcript exports (`tmp/rich_e2e_cli.(log|html)`) and Progress/Timing panels; next beads (bd-rlc/bd-rlp) will extend coverage to agent scripts + warning/diag combos and wire the run_checks toggle/docs._
+_2025-11-09 — PurpleBear (bd-rlc) extended the suite with the agent summarize flow + the warnings tail + diag combo, both emitting the new transcript artifacts and asserting on FlowLogger progress/timing blocks so §14.2 scenarios 2-3 are covered._
+_2025-11-09 — PurpleBear (bd-rlp) added the `MDWB_RUN_E2E_RICH` + `RICH_E2E_ARTIFACT_DIR` wiring in `scripts/run_checks.sh`/docs so FlowLogger runs stay opt-in and copy their transcripts into `tmp/rich_e2e_cli/` for CI artifacts._
+_2025-11-09 — PurpleBear (bd-hki) upgraded `tests/test_e2e_generated.py` with FlowLogger logging, diff snippets, and README/docs guidance (`MDWB_RUN_E2E_GENERATED`, `MDWB_GENERATED_E2E_CASES`) so the generative guardrail suite is actionable when toggled on._
+
 ---
 
 ## 15. Roadmap Enhancements
@@ -549,6 +579,7 @@ When adding code to these areas:
 - PDF capture improvements deferred (Section 19.12).
 
 _2025-11-08 — BlueMountain (bd-692, bd-we4, bd-n5c) opened beads for the seam watermarks, semantic post-processing toggle, and depth-1 crawl mode so these §15 bullets move beyond wishlist status._
+_2025-11-09 — RedDog (bd-692) implemented viewport seam watermarks (hashed CSS overlays + seam hash metadata) so tiles/manifest/CLI surface deterministic seam markers for debugging._
 
 ---
 
@@ -612,6 +643,7 @@ Below is a focused, pragmatic list of near-term upgrades. They map to the sectio
 ### 19.4 Stitching: Safer Merges & Provenance
 _2025-11-08 — BlueMountain (bd-b9e) opened to land DOM-guided heading leveling, SSIM-gated table merges, richer provenance comments, and the artifact highlight helper promised in this section._
 _2025-11-09 — RedDog (bd-b9e) delivered the seam markers + enriched provenance comments and overlap-aware table header trimming so reviewers can see exactly where tiles merged and why headers were dropped._
+_2025-11-09 — PinkCastle (bd-b9e follow-up) hardened the stitcher: table header trimming now ignores blank/comment prologues, DOM assists merge multi-line hyphen splits while preserving list/blockquote prefixes, overlay candidates are consumed FIFO to keep duplicates aligned, and the warnings CLI table now folds seam/sweep cells so ratios stay readable in Rich output._
 - DOM-guided heading leveling that stores the original line in an HTML comment right above normalized content.
 - Table merge heuristics keyed on repeated header rows + high SSIM; otherwise keep blocks separate.
 - Upgrade provenance comments to `<!-- source: tile_i, y=1234, sha256=..., scale=2.0 -->` and add `/jobs/{id}/artifact/... ?highlight=tile_i,y0,y1` viewer helpers.
@@ -714,7 +746,7 @@ _2025-11-08 — WhiteCastle (bd-2n8) added an opt-in Prometheus smoke step to `s
 _2025-11-08 — WhiteCastle (bd-ljl/rqn) extended `scripts/check_metrics.py` with `--exporter-url` + `--json` flags, documented the legacy `scripts/prom_scrape_check.py` wrapper, and updated README/docs/ops to call out the optional run_checks toggle for telemetry smoke._
 _2025-11-08 — PurpleHill (bd-ljl/rqn) enriched the `--json` output from `scripts/check_metrics.py` with `generated_at`, `ok_count`, `failed_count`, and per-target entries so CI dashboards can consume a structured summary directly, and refreshed README/docs/ops to highlight `MDWB_CHECK_METRICS`/`CHECK_METRICS_TIMEOUT` and the legacy `scripts/prom_scrape_check.py` wrapper._
 _2025-11-08 — RedSnow (bd-ljl/rqn follow-up) added per-target `duration_ms` plus `total_duration_ms` to the JSON summary and documented the probe timing fields in README/docs/ops so telemetry dashboards can reason about scrape latency._
-_2025-11-08 — PurpleHill (bd-3aa) added the `MDWB_RUN_E2E=1` toggle to `scripts/run_checks.sh` so the rich `tests/test_e2e_cli.py` suite can run on demand (and documented the option in README/docs/ops), keeping the heavier CLI coverage opt-in for CI/local workflows._
+_2025-11-08 — PurpleHill (bd-3aa) added the `MDWB_RUN_E2E=1` toggle to `scripts/run_checks.sh` for on-demand FlowLogger runs (now superseded by `MDWB_RUN_E2E_RICH=1` after bd-rlp so the original flag can stay lightweight)._
 _2025-11-08 — PinkDog (bd-oqr) added the `mdwb diag <job_id>` CLI command so on-call engineers can pull CfT/Playwright metadata, capture/OCR/stitch timings, warnings, and blocklist hits (with `--json` output) straight from the CLI per the Section 20 playbook._
 
 ### 20.3 Release & Regression Process

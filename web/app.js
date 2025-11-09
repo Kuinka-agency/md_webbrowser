@@ -69,6 +69,8 @@ function initSseHandlers() {
   const ocrQuotaEl = root.querySelector('[data-ocr-quota]');
   const ocrBatchesEl = root.querySelector('[data-ocr-batches]');
   const ocrAutotuneEl = root.querySelector('[data-ocr-autotune]');
+  const seamSummaryEl = root.querySelector('[data-seam-summary]');
+  const seamTableEl = root.querySelector('[data-seam-table]');
 
   const setStatus = (value, variant = 'info') => {
     statusEl.textContent = value;
@@ -89,6 +91,8 @@ function initSseHandlers() {
           validationListEl,
           sweepSummaryEl,
           validationSummaryEl,
+          seamSummaryEl,
+          seamTableEl,
           ocrQuotaEl,
           ocrBatchesEl,
           ocrAutotuneEl,
@@ -274,6 +278,8 @@ function renderManifest(
     validationListEl,
     sweepSummaryEl,
     validationSummaryEl,
+    seamSummaryEl,
+    seamTableEl,
     ocrQuotaEl,
     ocrBatchesEl,
     ocrAutotuneEl,
@@ -308,10 +314,103 @@ function renderManifest(
   renderValidationFailures(validationListEl, parsedPayload?.validation_failures);
   updateSweepSummary(sweepSummaryEl, parsedPayload);
   updateValidationSummary(validationSummaryEl, parsedPayload?.validation_failures);
+  renderSeamSummary(seamSummaryEl, parsedPayload?.seam_markers);
+  renderSeamMarkers(seamTableEl, parsedPayload?.seam_markers);
   renderOcrQuota(ocrQuotaEl, parsedPayload?.ocr_quota);
   renderOcrBatches(ocrBatchesEl, parsedPayload?.ocr_batches);
   renderOcrAutotune(ocrAutotuneEl, parsedPayload?.ocr_autotune);
   element.textContent = formatted;
+}
+
+function renderSeamSummary(element, markers) {
+  if (!element) {
+    return;
+  }
+  const entries = Array.isArray(markers) ? markers.filter((entry) => entry && typeof entry === 'object') : [];
+  if (!entries.length) {
+    element.textContent = 'No seam markers recorded yet.';
+    element.classList.add('placeholder');
+    return;
+  }
+  const tiles = new Set();
+  const hashes = new Set();
+  entries.forEach((entry) => {
+    if (entry.tile_index !== undefined && entry.tile_index !== null) {
+      tiles.add(entry.tile_index);
+    }
+    if (entry.hash) {
+      hashes.add(entry.hash);
+    }
+  });
+  element.textContent = `${entries.length} marker${entries.length === 1 ? '' : 's'} · ${tiles.size} tile${tiles.size === 1 ? '' : 's'} · ${hashes.size} hash${hashes.size === 1 ? '' : 'es'}`;
+  element.classList.remove('placeholder');
+}
+
+function renderSeamMarkers(container, markers) {
+  if (!container) {
+    return;
+  }
+  const rows = Array.isArray(markers) ? markers.filter((entry) => entry && typeof entry === 'object') : [];
+  if (!rows.length) {
+    container.innerHTML = '<p class="placeholder">No seam markers recorded yet.</p>';
+    return;
+  }
+  const positionOrder = { top: 0, bottom: 1 };
+  const normalized = rows
+    .map((entry) => ({
+      tile: entry.tile_index,
+      position: typeof entry.position === 'string' ? entry.position : '—',
+      hash: typeof entry.hash === 'string' ? entry.hash : '—',
+    }))
+    .sort((a, b) => {
+      const aNum = Number(a.tile);
+      const bNum = Number(b.tile);
+      let tileCompare = 0;
+      if (Number.isFinite(aNum) && Number.isFinite(bNum)) {
+        tileCompare = aNum - bNum;
+      } else {
+        tileCompare = String(a.tile ?? '').localeCompare(String(b.tile ?? ''));
+      }
+      if (tileCompare !== 0) {
+        return tileCompare;
+      }
+      const aOrder = positionOrder[a.position?.toLowerCase?.()] ?? 2;
+      const bOrder = positionOrder[b.position?.toLowerCase?.()] ?? 2;
+      return aOrder - bOrder;
+    });
+  const limit = 10;
+  const table = document.createElement('table');
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th scope="col">Tile</th>
+        <th scope="col">Position</th>
+        <th scope="col">Hash</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${normalized
+        .slice(0, limit)
+        .map(
+          (entry) => `
+        <tr>
+          <td>${entry.tile ?? '—'}</td>
+          <td>${entry.position}</td>
+          <td><code>${entry.hash}</code></td>
+        </tr>
+      `,
+        )
+        .join('')}
+    </tbody>
+  `;
+  container.innerHTML = '';
+  container.appendChild(table);
+  if (normalized.length > limit) {
+    const note = document.createElement('p');
+    note.className = 'seam-table__note';
+    note.textContent = `Showing ${limit} of ${normalized.length} markers`;
+    container.appendChild(note);
+  }
 }
 
 function renderLinks(container, raw) {

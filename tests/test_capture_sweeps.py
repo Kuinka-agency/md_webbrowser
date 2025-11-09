@@ -124,7 +124,16 @@ async def test_perform_viewport_sweeps_handles_shrink_retry(monkeypatch: pytest.
     monkeypatch.setattr(capture_module, "slice_into_tiles", _stub_tiles)
     monkeypatch.setattr(capture_module, "validate_tiles", lambda tiles: None)
 
-    tiles, stats, user_agent, blocklist_hits, warnings, dom_bytes, failures = await _perform_viewport_sweeps(
+    (
+        tiles,
+        stats,
+        user_agent,
+        blocklist_hits,
+        warnings,
+        dom_bytes,
+        failures,
+        sweep_events,
+    ) = await _perform_viewport_sweeps(
         context=cast(capture_module.BrowserContext, context),
         config=CaptureConfig(url="https://example.com"),
         viewport_overlap_px=200,
@@ -150,6 +159,7 @@ async def test_perform_viewport_sweeps_handles_shrink_retry(monkeypatch: pytest.
     assert "scroll-shrink" in codes
     assert dom_bytes == b"<html></html>"
     assert failures == []
+    assert sweep_events, "sweep events should capture per-step telemetry"
     assert len(tiles) == stats.sweep_count
     # Ensure scrollTo was invoked with the expected offsets (0 for reset plus >0 for sweeps).
     assert page.scroll_calls[0] == 0

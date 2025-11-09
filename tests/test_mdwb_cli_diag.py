@@ -68,6 +68,10 @@ def test_diag_uses_snapshot_manifest(monkeypatch):
         "timings": {"capture_ms": 10, "ocr_ms": 20, "stitch_ms": 5, "total_ms": 35},
         "warnings": [{"code": "canvas-heavy", "count": 5, "threshold": 3, "message": "canvas"}],
         "blocklist_hits": {"#banner": 2},
+        "seam_markers": [
+            {"tile_index": 0, "position": "top", "hash": "abc111"},
+            {"tile_index": 1, "position": "bottom", "hash": "def222"},
+        ],
     }
     snapshot = {"id": "job123", "url": "https://example.com", "state": "DONE", "progress": {"done": 5, "total": 5}, "manifest": manifest}
     stub = StubClient({"/jobs/job123": StubResponse(200, payload=snapshot)})
@@ -80,6 +84,8 @@ def test_diag_uses_snapshot_manifest(monkeypatch):
     assert "/jobs/job123/manifest.json" not in stub.calls
     assert "CfT" in result.output
     assert "Stable-1" in result.output
+    assert "Seam Markers" in result.output
+    assert "abc111" in result.output
 
 
 def test_diag_fetches_manifest_when_missing(monkeypatch):

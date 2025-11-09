@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict
+from collections import Counter
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from importlib import metadata
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Mapping, Sequence, TypedDict
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Sequence, TypedDict, cast
 from uuid import uuid4
 
 import hashlib
@@ -42,6 +43,37 @@ LOGGER = logging.getLogger(__name__)
 
 WebhookSender = Callable[[str, dict[str, Any]], Awaitable[None]]
 _EVENT_HISTORY_LIMIT = 500
+
+
+def summarize_dom_assists(entries: Sequence[Any] | None) -> dict[str, Any] | None:
+    if not entries:
+        return None
+    normalized: list[dict[str, Any]] = []
+    for entry in entries:
+        if entry is None:
+            continue
+        if isinstance(entry, Mapping):
+            normalized.append(dict(entry))
+        elif is_dataclass(entry):
+            normalized.append(asdict(entry))
+    if not normalized:
+        return None
+    counter = Counter(str(item.get("reason", "unknown")) for item in normalized)
+    summary: dict[str, Any] = {
+        "count": len(normalized),
+        "reasons": sorted(reason for reason in counter if isinstance(reason, str)),
+        "reason_counts": [
+            {"reason": reason, "count": count} for reason, count in counter.most_common()
+        ],
+    }
+    sample = next((entry for entry in normalized if entry.get("reason")), normalized[0])
+    summary["sample"] = {
+        "tile_index": sample.get("tile_index"),
+        "line": sample.get("line"),
+        "reason": sample.get("reason"),
+        "dom_text": sample.get("dom_text"),
+    }
+    return summary
 
 try:  # Playwright may be missing in some CI environments
     PLAYWRIGHT_VERSION = metadata.version("playwright")
@@ -478,19 +510,9 @@ class JobManager:
         assists = getattr(manifest, "dom_assists", None)
         if not assists:
             return
-        reasons = {entry.get("reason", "unknown") for entry in assists if isinstance(entry, dict)}
-        summary = {
-            "count": len(assists),
-            "reasons": sorted(reason for reason in reasons if isinstance(reason, str)),
-        }
-        sample = assists[0] if isinstance(assists[0], dict) else None
-        if sample:
-            summary["sample"] = {
-                "tile_index": sample.get("tile_index"),
-                "line": sample.get("line"),
-                "reason": sample.get("reason"),
-            }
-        self._record_custom_event(job_id, "dom_assist", summary)
+        summary = summarize_dom_assists(assists)
+        if summary:
+            self._record_custom_event(job_id, "dom_assist", summary)
 
     def _maybe_trigger_webhooks(self, job_id: str, payload: JobSnapshot) -> None:
         sender = self._webhook_sender
@@ -653,6 +675,10 @@ async def _run_ocr_pipeline(
             }
             for entry in dom_assists
         ]
+        summary = summarize_dom_assists(capture_result.manifest.dom_assists)
+        if summary:
+            manifest_any = cast(Any, capture_result.manifest)
+            manifest_any.dom_assist_summary = summary
     stitch_ms = int((time.perf_counter() - stitch_start) * 1000)
     ocr_links = extract_links_from_markdown(markdown)
     return markdown, ocr_ms, stitch_ms, ocr_links

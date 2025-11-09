@@ -109,3 +109,23 @@ def test_append_warning_log_records_validation_failures_without_other_warnings(m
     assert record["validation_failures"] == ["Tile 1 checksum mismatch"]
     assert record["sweep_stats"]["retry_attempts"] == 1
     assert record["overlap_match_ratio"] == 0.8
+
+
+def test_append_warning_log_includes_seam_summary(monkeypatch, tmp_path):
+    log_path = tmp_path / "warnings.jsonl"
+    monkeypatch.setattr("app.warning_log.get_settings", lambda: _settings_with_log(log_path))
+
+    manifest = _demo_manifest()
+    manifest.seam_markers = [
+        {"tile_index": 0, "position": "top", "hash": "abc111"},
+        {"tile_index": 1, "position": "bottom", "hash": "def222"},
+    ]
+
+    append_warning_log(job_id="run-4", url="https://example.com/seams", manifest=manifest)
+
+    record = json.loads(log_path.read_text().strip())
+    seam_summary = record.get("seam_markers")
+    assert seam_summary["count"] == 2
+    assert seam_summary["unique_tiles"] == 2
+    assert seam_summary["unique_hashes"] == 2
+    assert seam_summary["sample"][0]["hash"] == "abc111"
