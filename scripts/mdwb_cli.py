@@ -794,15 +794,22 @@ def _watch_job_events_pretty(
         interval=interval,
         client=client,
     ):
-        if raw:
-            console.print(line)
-            continue
+        entry: dict[str, Any] | None = None
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:
+            entry = None
+
+        if entry is not None:
+            _trigger_event_hooks(entry, hooks)
+
+        if raw:
             console.print(line)
             continue
-        _trigger_event_hooks(entry, hooks)
+
+        if entry is None:
+            console.print(line)
+            continue
         event_name = entry.get("event")
         if isinstance(event_name, str) and event_name == "dom_assist":
             _print_dom_assist_event(entry)

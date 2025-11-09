@@ -208,6 +208,82 @@ def test_cli_events_invokes_watch_job_events(monkeypatch, tmp_path: Path) -> Non
     assert log_path.read_text(encoding="utf-8") == "existing\n{}\n"
 
 
+def test_watch_events_with_fallback_streams_sse_on_http_error(monkeypatch):
+    called: dict[str, Any] = {}
+
+    def fake_watch_job_events_pretty(*_args, **_kwargs):  # noqa: ANN001
+        raise httpx.HTTPError("boom")
+
+    def fake_stream_job(job_id, settings, raw, hooks, on_terminal, progress_meter, client):  # noqa: ANN001
+        called.update(
+            {
+                "job_id": job_id,
+                "settings": settings,
+                "raw": raw,
+                "hooks": hooks,
+                "on_terminal": on_terminal,
+                "progress_meter": progress_meter,
+                "client": client,
+            }
+        )
+
+    fake_client = httpx.Client(base_url="http://localhost")
+    monkeypatch.setattr(mdwb_cli, "_watch_job_events_pretty", fake_watch_job_events_pretty)
+    monkeypatch.setattr(mdwb_cli, "_stream_job", fake_stream_job)
+
+    with mdwb_cli.console.capture() as capture:
+        mdwb_cli._watch_events_with_fallback(
+            "job-xyz",
+            API_SETTINGS,
+            cursor="2025-11-08T00:00:00Z",
+            follow=True,
+            interval=0.5,
+            raw=False,
+            hooks={"snapshot": ["echo"]},
+            on_terminal=lambda *_: None,
+            progress_meter=mdwb_cli._ProgressMeter(),
+            client=fake_client,
+        )
+
+    output = capture.get()
+    assert "falling back to SSE stream" in output
+    assert called["job_id"] == "job-xyz"
+    assert called["client"] is fake_client
+    fake_client.close()
+
+
+def test_watch_job_events_pretty_triggers_hooks_in_raw_mode(monkeypatch):
+    events = [
+        json.dumps(
+            {
+                "event": "snapshot",
+                "snapshot": {
+                    "state": "BROWSER_STARTING",
+                    "progress": {"done": 0, "total": 1},
+                },
+            }
+        )
+    ]
+    monkeypatch.setattr(mdwb_cli, "_iter_event_lines", lambda *_, **__: iter(events))
+    received: list[dict[str, Any]] = []
+    monkeypatch.setattr(mdwb_cli, "_trigger_event_hooks", lambda entry, hooks: received.append(entry))
+
+    with mdwb_cli.console.capture() as capture:
+        mdwb_cli._watch_job_events_pretty(
+            "job-hooks",
+            API_SETTINGS,
+            cursor=None,
+            follow=False,
+            interval=0.1,
+            raw=True,
+            hooks={"snapshot": ["echo"]},
+        )
+
+    output = capture.get()
+    assert '"event": "snapshot"' in output
+    assert received and received[0]["snapshot"]["state"] == "BROWSER_STARTING"
+
+
 def test_iter_sse_parses_events():
     class DummyResponse:
         def __init__(self, lines: list[str]) -> None:
