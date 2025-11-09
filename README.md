@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/anthropics/markdown_web_browser/mai
 2. **Installs uv package manager** - The modern Python package manager from Astral
 3. **Installs system dependencies** - Automatically installs libvips (image processing library)
 4. **Clones the repository** - Downloads the latest Markdown Web Browser code
-5. **Sets up Python 3.11 environment** - Creates isolated virtual environment with all dependencies
+5. **Sets up Python 3.13 environment** - Creates isolated virtual environment with all dependencies
 6. **Installs Playwright browsers** - Downloads Chromium for headless browsing
 7. **Configures environment** - Sets up `.env` file with default settings
 8. **Runs verification tests** - Ensures everything is working correctly

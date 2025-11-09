@@ -18,7 +18,7 @@ import sys
 import time
 import traceback
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+# Removed unused import: from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum, auto
