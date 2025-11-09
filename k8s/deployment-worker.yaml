@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mdwb-worker
+  namespace: mdwb
+  labels:
+    app: markdown-web-browser
+    component: worker
+spec:
+  replicas: 3  # Scale workers based on load
+  selector:
+    matchLabels:
+      app: markdown-web-browser
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: markdown-web-browser
+        component: worker
+    spec:
+      containers:
+        - name: worker
+          image: markdown-web-browser:latest  # Same image as web
+          imagePullPolicy: Always
+          command: ["python", "scripts/run_worker.py"]
+          env:
+            # Load configuration from ConfigMap
+            - name: CAPTURE_VIEWPORT_WIDTH
+              valueFrom:
+                configMapKeyRef:
+                  name: mdwb-config
+                  key: CAPTURE_VIEWPORT_WIDTH
+            - name: CAPTURE_VIEWPORT_HEIGHT
+              valueFrom:
+                configMapKeyRef:
+                  name: mdwb-config
+                  key: CAPTURE_VIEWPORT_HEIGHT
+            - name: OLMOCR_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: mdwb-config
+                  key: OLMOCR_MODEL
+
+            # Load secrets
+            - name: OLMOCR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mdwb-secrets
+                  key: OLMOCR_API_KEY
+            - name: OLMOCR_SERVER
+              valueFrom:
+                secretKeyRef:
+                  name: mdwb-secrets
+                  key: OLMOCR_SERVER
+
+            # Redis connection for job queue
+            - name: REDIS_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: mdwb-secrets
+                  key: REDIS_HOST
+            - name: REDIS_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: mdwb-secrets
+                  key: REDIS_PORT
+
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 2Gi
+            limits:
+              cpu: 4000m
+              memory: 8Gi
+
+          volumeMounts:
+            - name: cache
+              mountPath: /app/.cache
+            - name: data
+              mountPath: /app/data
+            - name: ops
+              mountPath: /app/ops
+
+      volumes:
+        - name: cache
+          emptyDir:
+            sizeLimit: 20Gi  # Workers need more cache for parallel jobs
+        - name: data
+          persistentVolumeClaim:
+            claimName: mdwb-data
+        - name: ops
+          persistentVolumeClaim:
+            claimName: mdwb-ops
+
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000

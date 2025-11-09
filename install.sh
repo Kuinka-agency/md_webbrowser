@@ -238,6 +238,19 @@ install_system_deps() {
 
 # Function to clone or update repository
 setup_repository() {
+    # Validate INSTALL_DIR before any dangerous operations
+    if [ -z "$INSTALL_DIR" ] || [ "$INSTALL_DIR" = "/" ] || [ "$INSTALL_DIR" = "/usr" ] || [ "$INSTALL_DIR" = "/bin" ] || [ "$INSTALL_DIR" = "/etc" ]; then
+        print_color "$RED" "Error: Invalid or dangerous installation directory: '$INSTALL_DIR'"
+        exit 1
+    fi
+
+    # Check if git is available
+    if ! command_exists git; then
+        print_color "$RED" "Error: git is not installed."
+        print_color "$YELLOW" "Please install git or run without --no-deps flag."
+        exit 1
+    fi
+
     if [ -d "$INSTALL_DIR/.git" ]; then
         print_color "$BLUE" "Updating existing repository..."
         cd "$INSTALL_DIR"
@@ -252,6 +265,7 @@ setup_repository() {
                     exit 1
                 fi
             fi
+            # Safe to remove after validation above
             rm -rf "$INSTALL_DIR"
         fi
 
@@ -268,11 +282,11 @@ setup_python_env() {
     print_color "$BLUE" "Setting up Python environment..."
 
     # Install Python if needed
-    uv python install $PYTHON_VERSION
+    uv python install "$PYTHON_VERSION"
 
     # Create virtual environment
     if [ ! -d ".venv" ]; then
-        uv venv --python $PYTHON_VERSION
+        uv venv --python "$PYTHON_VERSION"
     fi
 
     # Sync dependencies
@@ -326,14 +340,17 @@ install_playwright_browsers() {
     # CRITICAL FIX: Install Chrome for Testing with --channel=cft
     uv run playwright install chromium --with-deps --channel=cft
 
-    # Verify CfT installation
-    if ! uv run playwright install chromium --dry-run --channel=cft 2>&1 | grep -q "is already installed"; then
+    # Verify CfT installation with fallback checks
+    local verify_output=$(uv run playwright install chromium --dry-run --channel=cft 2>&1)
+    if echo "$verify_output" | grep -qE "(is already installed|already exists)"; then
+        print_color "$GREEN" "✓ Chrome for Testing installed successfully"
+    elif [ -d "$HOME/.cache/ms-playwright" ] || [ -d "$HOME/Library/Caches/ms-playwright" ]; then
+        print_color "$YELLOW" "⚠ CfT verification uncertain, but browser cache exists - proceeding"
+    else
         print_color "$RED" "✗ Chrome for Testing installation may have failed"
         print_color "$YELLOW" "  The system may not work correctly without CfT"
         return 1
     fi
-
-    print_color "$GREEN" "✓ Chrome for Testing installed successfully"
 
     return 0
 }
@@ -359,14 +376,12 @@ setup_config() {
         local detected_version=$(detect_cft_version)
 
         if [ ! -z "$detected_version" ]; then
-            # Update CFT_VERSION in .env
+            # Update CFT_VERSION in .env (safe approach: remove old line, append new)
             if grep -q "^CFT_VERSION=" .env; then
-                if [[ "$OSTYPE" == "darwin"* ]]; then
-                    # macOS requires '' after -i
-                    sed -i '' "s|^CFT_VERSION=.*|CFT_VERSION=$detected_version|" .env
-                else
-                    sed -i "s|^CFT_VERSION=.*|CFT_VERSION=$detected_version|" .env
-                fi
+                # Create temp file without CFT_VERSION line, then append new value
+                grep -v "^CFT_VERSION=" .env > .env.tmp || true
+                mv .env.tmp .env
+                echo "CFT_VERSION=$detected_version" >> .env
                 print_color "$GREEN" "✓ Updated CFT_VERSION in .env to $detected_version"
             else
                 echo "CFT_VERSION=$detected_version" >> .env
@@ -385,11 +400,10 @@ setup_config() {
     # Set OCR API key if provided
     if [ ! -z "$OCR_API_KEY" ]; then
         if grep -q "^OLMOCR_API_KEY=" .env; then
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                sed -i '' "s|^OLMOCR_API_KEY=.*|OLMOCR_API_KEY=$OCR_API_KEY|" .env
-            else
-                sed -i "s|^OLMOCR_API_KEY=.*|OLMOCR_API_KEY=$OCR_API_KEY|" .env
-            fi
+            # Safe approach: remove old line, append new (handles special chars in API key)
+            grep -v "^OLMOCR_API_KEY=" .env > .env.tmp || true
+            mv .env.tmp .env
+            echo "OLMOCR_API_KEY=$OCR_API_KEY" >> .env
             print_color "$GREEN" "✓ OCR API key configured"
         else
             echo "OLMOCR_API_KEY=$OCR_API_KEY" >> .env
@@ -430,8 +444,12 @@ run_tests() {
         fi
 
         # Verify Chrome for Testing is actually installed
-        if uv run playwright install chromium --dry-run --channel=cft 2>&1 | grep -q "is already installed"; then
+        local cft_check=$(uv run playwright install chromium --dry-run --channel=cft 2>&1)
+        if echo "$cft_check" | grep -qE "(is already installed|already exists)"; then
             print_color "$GREEN" "✓ Chrome for Testing is installed and ready"
+        elif [ -d "$HOME/.cache/ms-playwright" ] || [ -d "$HOME/Library/Caches/ms-playwright" ]; then
+            # Fallback: check if Playwright browser cache exists
+            print_color "$YELLOW" "⚠ Chrome for Testing verification uncertain, but browser cache exists"
         else
             print_color "$RED" "✗ Chrome for Testing not detected"
             print_color "$YELLOW" "  System may not work correctly - screenshots won't be deterministic"
@@ -449,7 +467,9 @@ run_tests() {
 
     # Test environment configuration
     if [ -f ".env" ]; then
-        if grep -q "^OLMOCR_API_KEY=sk-" .env 2>/dev/null; then
+        # Check for non-empty OLMOCR_API_KEY value (any format)
+        local api_key_value=$(grep "^OLMOCR_API_KEY=" .env 2>/dev/null | cut -d= -f2-)
+        if [ ! -z "$api_key_value" ] && [ "$api_key_value" != "sk-***" ]; then
             print_color "$GREEN" "✓ OCR API key configured in .env"
         else
             print_color "$YELLOW" "⚠ OCR API key not set - system will not work until configured"

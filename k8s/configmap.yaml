@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mdwb-config
+  namespace: mdwb
+  labels:
+    app: markdown-web-browser
+data:
+  # Browser settings
+  CAPTURE_VIEWPORT_WIDTH: "1280"
+  CAPTURE_VIEWPORT_HEIGHT: "2000"
+  CAPTURE_DEVICE_SCALE_FACTOR: "2"
+  CAPTURE_COLOR_SCHEME: "light"
+  CAPTURE_LONG_SIDE_PX: "1288"
+
+  # OCR settings
+  OLMOCR_MODEL: "olmOCR-2-7B-1025-FP8"
+  OCR_USE_FP8: "true"
+  OCR_MIN_CONCURRENCY: "2"
+  OCR_MAX_CONCURRENCY: "8"
+  OCR_MAX_BATCH_TILES: "3"
+
+  # Server settings
+  MDWB_SERVER_IMPL: "granian"
+  MDWB_SERVER_WORKERS: "4"
+  MDWB_GRANIAN_RUNTIME_THREADS: "2"
+  MDWB_SERVER_LOG_LEVEL: "info"
+  PROMETHEUS_PORT: "9000"
+
+  # Storage paths
+  CACHE_ROOT: "/app/.cache"
+  RUNS_DB_PATH: "/app/data/runs.db"
+  WARNING_LOG_PATH: "/app/ops/warnings.jsonl"
+  BLOCKLIST_PATH: "/app/config/blocklist.json"
+
+  # Feature flags
+  REQUIRE_API_KEY: "true"
+  API_KEY_HEADER: "X-API-Key"

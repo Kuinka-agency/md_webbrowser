@@ -1,0 +1,66 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mdwb-ingress
+  namespace: mdwb
+  labels:
+    app: markdown-web-browser
+  annotations:
+    # Nginx Ingress Controller annotations
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"  # Allow large requests
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+
+    # Cert-manager for automatic HTTPS (optional)
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+
+    # Rate limiting (if using nginx ingress)
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-connections: "10"
+
+spec:
+  ingressClassName: nginx  # Or your ingress controller class
+  tls:
+    - hosts:
+        - mdwb.example.com  # Replace with your domain
+      secretName: mdwb-tls
+  rules:
+    - host: mdwb.example.com  # Replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mdwb-web
+                port:
+                  number: 80
+
+---
+# Optional: Separate ingress for metrics (internal only)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mdwb-metrics
+  namespace: mdwb
+  labels:
+    app: markdown-web-browser
+    component: metrics
+  annotations:
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"  # Internal only
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: mdwb-metrics.internal.example.com
+      http:
+        paths:
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: mdwb-web
+                port:
+                  number: 9000
