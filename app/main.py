@@ -297,12 +297,27 @@ async def replay_job(request: ReplayRequest) -> JobSnapshotResponse:
 
 @app.get("/jobs/{job_id}/stream")
 async def job_stream(job_id: str, request: Request) -> StreamingResponse:
+    # Handle demo job specially - return a waiting stream
+    if job_id == "demo":
+        async def demo_generator() -> AsyncIterator[str]:
+            demo = _demo_snapshot()
+            yield f"event: state\ndata: {demo.get('state', 'WAITING')}\n\n"
+            yield f"event: progress\ndata: 0 / 0 tiles\n\n"
+            heartbeat = 0
+            while not await request.is_disconnected():
+                await asyncio.sleep(5)
+                heartbeat += 1
+                yield f"event: log\ndata: <li>Waiting for job... Enter URL and click Run Capture</li>\n\n"
+        return StreamingResponse(demo_generator(), media_type="text/event-stream")
+
     try:
         queue = JOB_MANAGER.subscribe(job_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Job not found") from exc
 
     async def event_generator() -> AsyncIterator[str]:
+        # Initial keepalive to flush connection buffers
+        yield ": connected\n\n"
         heartbeat = 0
         try:
             while True:
@@ -322,11 +337,26 @@ async def job_stream(job_id: str, request: Request) -> StreamingResponse:
         finally:
             JOB_MANAGER.unsubscribe(job_id, queue)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/jobs/{job_id}/events")
 async def job_events(job_id: str, request: Request, since: str | None = None) -> StreamingResponse:
+    # Handle demo job specially - return empty event stream
+    if job_id == "demo":
+        async def demo_events_generator() -> AsyncIterator[str]:
+            yield '{"event": "waiting", "message": "Enter URL and click Run Capture"}\n'
+            while not await request.is_disconnected():
+                await asyncio.sleep(10)
+        return StreamingResponse(demo_events_generator(), media_type="application/x-ndjson")
+
     parsed_since = _parse_since(since)
     try:
         backlog, queue = JOB_MANAGER.subscribe_events(job_id, since=parsed_since)

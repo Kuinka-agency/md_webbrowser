@@ -381,10 +381,15 @@ async def _submit_batch(
             )
         except Exception as exc:
             last_error = exc
-            LOGGER.warning("olmOCR request error on attempt %s/%s: %s", attempts, _MAX_ATTEMPTS, exc)
+            LOGGER.warning(
+                "olmOCR request error on attempt %s/%s for tiles %s: %s",
+                attempts, _MAX_ATTEMPTS, tile_ids, exc,
+                exc_info=True,
+            )
         if attempts >= _MAX_ATTEMPTS:
             break
-        await _sleep(_BACKOFF_SCHEDULE[attempts - 1])
+        backoff_index = min(attempts - 1, len(_BACKOFF_SCHEDULE) - 1)
+        await _sleep(_BACKOFF_SCHEDULE[backoff_index])
     raise RuntimeError(f"olmOCR request failed after {_MAX_ATTEMPTS} attempts") from last_error
 
 
@@ -395,6 +400,8 @@ def _build_payload(tiles: Sequence[_EncodedTile], *, use_fp8: bool) -> dict:
 
     # Add allenai/ prefix if not present (for DeepInfra)
     model = tiles[0].model
+    if not model:
+        model = "olmOCR-2-7B-1025-FP8"  # Fallback to default model
     if not model.startswith("allenai/") and "olmOCR" in model:
         model = f"allenai/{model.split('-FP8')[0]}"  # Remove -FP8 suffix and add prefix
 

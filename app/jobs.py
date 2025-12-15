@@ -288,7 +288,16 @@ class JobManager:
         if self._watchdog_task is None or self._watchdog_task.done():
             self._shutdown = False
             self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+            self._watchdog_task.add_done_callback(self._on_watchdog_done)
             LOGGER.info("Job watchdog started with %ds timeout", self._job_timeout_seconds)
+
+    def _on_watchdog_done(self, task: asyncio.Task[None]) -> None:
+        """Callback when watchdog task completes, logging any exceptions."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            LOGGER.exception("Watchdog task crashed unexpectedly: %s", exc)
 
     async def stop_watchdog(self) -> None:
         """Stop the watchdog task gracefully."""

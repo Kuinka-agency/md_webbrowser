@@ -311,6 +311,13 @@ body {
   display: none;
 }
 
+.tab-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
 .warning-list {
   display: flex;
   flex-wrap: wrap;

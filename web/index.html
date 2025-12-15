@@ -17,8 +17,6 @@
       data-links-template="/jobs/{job_id}/links.json"
       data-manifest-template="/jobs/{job_id}/manifest.json"
       data-events-template="/jobs/{job_id}/events"
-      hx-ext="sse"
-      sse-connect="/jobs/demo/stream"
     >
       <header class="toolbar">
         <div class="toolbar__group">
@@ -93,13 +91,23 @@
 
         <div class="tab-panels">
           <article class="tab-panel" data-tab-panel="rendered">
-            <h2>Rendered Markdown</h2>
+            <div class="tab-panel__header">
+              <h2>Rendered Markdown</h2>
+              <button type="button" class="toolbar__button toolbar__button--small" data-copy-markdown>
+                Copy Markdown
+              </button>
+            </div>
             <div class="placeholder" data-sse-field="rendered">
               Streaming preview will render here as soon as OCR tiles arrive.
             </div>
           </article>
           <article class="tab-panel" data-tab-panel="raw" hidden>
-            <h2>Raw Markdown</h2>
+            <div class="tab-panel__header">
+              <h2>Raw Markdown</h2>
+              <button type="button" class="toolbar__button toolbar__button--small" data-copy-raw>
+                Copy Raw
+              </button>
+            </div>
             <pre class="placeholder" data-sse-field="raw">Waiting on OCR output…</pre>
           </article>
           <article class="tab-panel" data-tab-panel="artifacts" hidden>

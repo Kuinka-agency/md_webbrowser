@@ -1,14 +1,30 @@
 {
-  "version": "2025-11-07",
+  "version": "2025-12-15",
   "global": [
     "#onetrust-consent-sdk",
     "[data-testid='cookie-banner']",
     "[aria-label*='cookie']",
+    "[aria-label*='Cookie']",
+    "[aria-label*='consent']",
+    "[aria-label*='Consent']",
     "[role='dialog'][aria-live='polite']",
+    "[class*='cookie-consent']",
+    "[class*='cookie-modal']",
+    "[class*='cookie-banner']",
+    "[class*='consent-modal']",
+    "[class*='consent-banner']",
+    "[class*='gdpr']",
     "[class*='sticky-ad']",
     "div[class*='newsletter'][class*='overlay']"
   ],
   "domains": {
+    "yle.fi": [
+      "[class*='consent']",
+      "[class*='Consent']",
+      "[class*='evaste']",
+      "[data-testid*='consent']",
+      "div[role='dialog']"
+    ],
     "nytimes.com": [
       "#gateway-content",
       "div[aria-label='subscribe dialog']"

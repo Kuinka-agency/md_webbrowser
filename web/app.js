@@ -147,15 +147,68 @@ function initSseHandlers() {
     }
   };
 
+  const refreshMarkdown = async (jobId) => {
+    try {
+      const response = await fetch(`/jobs/${encodeURIComponent(jobId)}/result.md`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const markdown = await response.text();
+      updateField('raw', markdown);
+      // Simple markdown to HTML conversion for rendered view
+      const rendered = markdown
+        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/\n/g, '<br>');
+      updateField('rendered', `<div class="markdown-body">${rendered}</div>`);
+    } catch (error) {
+      console.error('Failed to refresh markdown', error);
+    }
+  };
+
   const state = {
     jobId: root.dataset.jobId || 'demo',
     streamTemplate: root.dataset.streamTemplate || '/jobs/{job_id}/stream',
+    eventSource: null,
   };
 
-  const setConnectUrl = (jobId) => {
+  const connectEventSource = (jobId) => {
+    // Close existing connection
+    if (state.eventSource) {
+      state.eventSource.close();
+      state.eventSource = null;
+    }
+
     const url = buildTemplateUrl(state.streamTemplate, jobId);
-    root.setAttribute('sse-connect', url);
-    window.htmx.process(root);
+    const es = new EventSource(url);
+
+    es.onopen = () => {
+      setStatus(`Connected (${jobId})`, 'success');
+    };
+
+    es.onerror = () => {
+      setStatus('Disconnected — retrying…', 'warning');
+    };
+
+    // Register handlers for each event type
+    Object.keys(eventHandlers).forEach((eventName) => {
+      es.addEventListener(eventName, (event) => {
+        const handler = eventHandlers[eventName];
+        if (handler) {
+          handler(event.data);
+        }
+      });
+    });
+
+    // Also handle 'log' events for heartbeats
+    es.addEventListener('log', () => {
+      // Heartbeat received, connection is alive
+    });
+
+    state.eventSource = es;
   };
 
   const connect = (jobId) => {
@@ -167,7 +220,7 @@ function initSseHandlers() {
       jobField.value = resolved;
     }
     setStatus('Connecting…', 'pending');
-    setConnectUrl(resolved);
+    connectEventSource(resolved);
     embeddingsPanel?.setJobId(resolved);
     eventsPanel?.connect(resolved);
     refreshManifest(resolved);
@@ -198,7 +251,11 @@ function initSseHandlers() {
     state: (data) => {
       updateField('state', data);
       const normalized = (data || '').trim().toUpperCase();
-      if (normalized === 'DONE' || normalized === 'FAILED') {
+      if (normalized === 'DONE') {
+        refreshManifest(state.jobId);
+        refreshLinks(state.jobId);
+        refreshMarkdown(state.jobId);
+      } else if (normalized === 'FAILED') {
         refreshManifest(state.jobId);
         refreshLinks(state.jobId);
       }
@@ -236,38 +293,42 @@ function initSseHandlers() {
     dom_assist: handleDomAssist,
   };
 
-  document.body.addEventListener('htmx:sseOpen', (event) => {
-    if (event.target === root) {
-      setStatus(`Connected (${state.jobId})`, 'success');
-    }
-  });
+  // Copy button handlers
+  const copyMarkdownBtn = root.querySelector('[data-copy-markdown]');
+  const copyRawBtn = root.querySelector('[data-copy-raw]');
+  const rawField = fieldMap.get('raw');
 
-  document.body.addEventListener('htmx:sseError', (event) => {
-    if (event.target === root) {
-      setStatus('Disconnected — retrying…', 'warning');
-    }
-  });
+  if (copyMarkdownBtn) {
+    copyMarkdownBtn.addEventListener('click', async () => {
+      const text = rawField?.textContent || '';
+      if (!text || text === 'Waiting on OCR output…') {
+        return;
+      }
+      const success = await copyTextToClipboard(text);
+      if (success) {
+        const original = copyMarkdownBtn.textContent;
+        copyMarkdownBtn.textContent = 'Copied!';
+        setTimeout(() => { copyMarkdownBtn.textContent = original; }, 1500);
+      }
+    });
+  }
 
-  document.body.addEventListener('htmx:sseClose', (event) => {
-    if (event.target === root) {
-      setStatus('Connection closed', 'warning');
-    }
-  });
+  if (copyRawBtn) {
+    copyRawBtn.addEventListener('click', async () => {
+      const text = rawField?.textContent || '';
+      if (!text || text === 'Waiting on OCR output…') {
+        return;
+      }
+      const success = await copyTextToClipboard(text);
+      if (success) {
+        const original = copyRawBtn.textContent;
+        copyRawBtn.textContent = 'Copied!';
+        setTimeout(() => { copyRawBtn.textContent = original; }, 1500);
+      }
+    });
+  }
 
-  document.body.addEventListener('htmx:sseBeforeMessage', (event) => {
-    if (event.target !== root) {
-      return;
-    }
-    const message = event.detail;
-    const name = message?.type || message?.event || '';
-    const handler = eventHandlers[name];
-    if (!handler) {
-      return;
-    }
-    event.preventDefault();
-    handler(message.data);
-  });
-
+  // Connect using native EventSource (replaces HTMX SSE)
   connect(state.jobId);
 
   return { connect, refreshLinks };
