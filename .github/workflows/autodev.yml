@@ -37,16 +37,24 @@ jobs:
         run: |
           START_TIME=$(date +%s)
           CLAUDE_OUTPUT="/tmp/claude-output-${{ github.run_id }}.json"
+          PROMPT_FILE=~/Claude/dev-factory/prompts/implement.md
+
+          # Build prompt from template
+          PROMPT=$(cat "$PROMPT_FILE" | \
+            sed "s|{{REPO}}|${{ github.repository }}|g" | \
+            sed "s|{{ISSUE_NUMBER}}|${{ github.event.issue.number }}|g" | \
+            sed "s|{{ISSUE_TITLE}}|${{ github.event.issue.title }}|g")
+
+          # Inject issue body (multiline safe)
+          ISSUE_BODY=$(cat <<'ISSUE_BODY_EOF'
+          ${{ github.event.issue.body }}
+          ISSUE_BODY_EOF
+          )
+          PROMPT=$(echo "$PROMPT" | sed "s|{{ISSUE_BODY}}|$ISSUE_BODY|g")
 
           # Run Claude with JSON output
           claude -p --dangerously-skip-permissions --output-format json \
-            "Implement this GitHub issue. Commit your changes when done.
-
-            IMPORTANT: Do NOT modify any files in .github/ directory.
-
-            ## ${{ github.event.issue.title }}
-
-            ${{ github.event.issue.body }}" > "$CLAUDE_OUTPUT" 2>&1 || true
+            "$PROMPT" > "$CLAUDE_OUTPUT" 2>&1 || true
 
           END_TIME=$(date +%s)
           DURATION_MS=$(( (END_TIME - START_TIME) * 1000 ))
@@ -70,8 +78,8 @@ jobs:
 
           # Extract metrics from Claude JSON output
           TOTAL_COST=$(jq -r '.total_cost_usd // 0' "$CLAUDE_OUTPUT" 2>/dev/null || echo "0")
-          INPUT_TOKENS=$(jq -r '.input_tokens // 0' "$CLAUDE_OUTPUT" 2>/dev/null || echo "0")
-          OUTPUT_TOKENS=$(jq -r '.output_tokens // 0' "$CLAUDE_OUTPUT" 2>/dev/null || echo "0")
+          INPUT_TOKENS=$(jq -r '.usage.input_tokens // 0' "$CLAUDE_OUTPUT" 2>/dev/null || echo "0")
+          OUTPUT_TOKENS=$(jq -r '.usage.output_tokens // 0' "$CLAUDE_OUTPUT" 2>/dev/null || echo "0")
           RESULT=$(jq -r '.result // "No result available"' "$CLAUDE_OUTPUT" 2>/dev/null || echo "No result available")
           SESSION_ID=$(jq -r '.session_id // "unknown"' "$CLAUDE_OUTPUT" 2>/dev/null || echo "unknown")
 
@@ -85,8 +93,8 @@ jobs:
           DURATION_MS=${{ steps.claude.outputs.duration_ms }}
           DURATION_MIN=$(echo "scale=1; $DURATION_MS / 60000" | bc)
 
-          # Append to usage.jsonl
-          USAGE_LINE=$(jq -n \
+          # Append to usage.jsonl (compact single-line JSON)
+          USAGE_LINE=$(jq -nc \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg repo "${{ github.repository }}" \
             --argjson issue_number "${{ github.event.issue.number }}" \
@@ -146,24 +154,31 @@ jobs:
         if: steps.create-pr.outputs.pr_created == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          RESULT: ${{ steps.usage.outputs.result }}
+          FILES_CHANGED: ${{ steps.create-pr.outputs.files_changed }}
         run: |
-          # Build the implementation summary comment
-          COMMENT_BODY="## Implementation Summary
+          # Write comment to file to avoid shell escaping issues
+          COMMENT_FILE="/tmp/comment-${{ github.run_id }}.md"
 
-          **PR**: ${{ steps.create-pr.outputs.pr_url }}
+          {
+            echo "## Implementation Summary"
+            echo ""
+            echo "**PR**: ${{ steps.create-pr.outputs.pr_url }}"
+            echo ""
+            echo "### What was done"
+            echo "$RESULT"
+            echo ""
+            echo "### Files changed (${{ steps.create-pr.outputs.files_count }})"
+            echo '```'
+            echo "$FILES_CHANGED"
+            echo '```'
+            echo ""
+            echo "---"
+            echo "*Duration: ${{ steps.usage.outputs.duration_min }} min | Cost: \$${{ steps.usage.outputs.total_cost }}*"
+          } > "$COMMENT_FILE"
 
-          ### What was done
-          ${{ steps.usage.outputs.result }}
-
-          ### Files changed (${{ steps.create-pr.outputs.files_count }})
-          \`\`\`
-          ${{ steps.create-pr.outputs.files_changed }}
-          \`\`\`
-
-          ---
-          *Duration: ${{ steps.usage.outputs.duration_min }} min | Cost: \$${{ steps.usage.outputs.total_cost }}*"
-
-          gh issue comment ${{ github.event.issue.number }} --body "$COMMENT_BODY"
+          gh issue comment ${{ github.event.issue.number }} --body-file "$COMMENT_FILE"
+          rm -f "$COMMENT_FILE"
 
       - name: Notify Complete
         if: success()
