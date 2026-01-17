@@ -19,7 +19,7 @@ jobs:
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         run: |
-          ~/Claude/dev-factory/notify.sh "🚀 *Job Started*
+          ~/Claude/dev-factory/notify.sh "🚀 Job Started
           Repo: ${{ github.repository }}
           Issue: #${{ github.event.issue.number }} - ${{ github.event.issue.title }}"
 
@@ -215,32 +215,41 @@ jobs:
         if: success()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          RESULT_SHORT: ${{ steps.usage.outputs.result_short }}
         run: |
+          # Write message to file to avoid shell escaping issues with backticks
+          MSG_FILE="/tmp/slack-msg-${{ github.run_id }}.txt"
           if [[ "${{ steps.create-pr.outputs.pr_created }}" == "true" ]]; then
-            ~/Claude/dev-factory/notify.sh "✅ *Job Complete*
-          Repo: ${{ github.repository }}
-          Issue: #${{ github.event.issue.number }}
-          PR: ${{ steps.create-pr.outputs.pr_url }}
-
-          *What was done:*
-          ${{ steps.usage.outputs.result_short }}
-
-          _Duration: ${{ steps.usage.outputs.duration_min }} min | Cost: \$${{ steps.usage.outputs.total_cost }}_"
+            {
+              echo "✅ Job Complete"
+              echo "Repo: ${{ github.repository }}"
+              echo "Issue: #${{ github.event.issue.number }}"
+              echo "PR: ${{ steps.create-pr.outputs.pr_url }}"
+              echo ""
+              echo "What was done:"
+              echo "$RESULT_SHORT"
+              echo ""
+              echo "Duration: ${{ steps.usage.outputs.duration_min }} min | Cost: \$${{ steps.usage.outputs.total_cost }}"
+            } > "$MSG_FILE"
           else
-            ~/Claude/dev-factory/notify.sh "ℹ️ *Job Complete - No Changes*
-          Repo: ${{ github.repository }}
-          Issue: #${{ github.event.issue.number }}
-          Claude determined no code changes were needed.
-
-          _Duration: ${{ steps.usage.outputs.duration_min }} min | Cost: \$${{ steps.usage.outputs.total_cost }}_"
+            {
+              echo "ℹ️ Job Complete - No Changes"
+              echo "Repo: ${{ github.repository }}"
+              echo "Issue: #${{ github.event.issue.number }}"
+              echo "Claude determined no code changes were needed."
+              echo ""
+              echo "Duration: ${{ steps.usage.outputs.duration_min }} min | Cost: \$${{ steps.usage.outputs.total_cost }}"
+            } > "$MSG_FILE"
           fi
+          ~/Claude/dev-factory/notify.sh "$(cat "$MSG_FILE")"
+          rm -f "$MSG_FILE"
 
       - name: Notify Failed
         if: failure()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         run: |
-          ~/Claude/dev-factory/notify.sh "❌ *Job Failed*
+          ~/Claude/dev-factory/notify.sh "❌ Job Failed
           Repo: ${{ github.repository }}
           Issue: #${{ github.event.issue.number }} - ${{ github.event.issue.title }}
           Check: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
