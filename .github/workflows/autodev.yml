@@ -38,23 +38,36 @@ jobs:
           START_TIME=$(date +%s)
           CLAUDE_OUTPUT="/tmp/claude-output-${{ github.run_id }}.json"
           PROMPT_FILE=~/Claude/dev-factory/prompts/implement.md
+          TEMP_PROMPT="/tmp/prompt-${{ github.run_id }}.txt"
+          ISSUE_BODY_FILE="/tmp/issue-body-${{ github.run_id }}.txt"
 
-          # Build prompt from template
-          PROMPT=$(cat "$PROMPT_FILE" | \
-            sed "s|{{REPO}}|${{ github.repository }}|g" | \
-            sed "s|{{ISSUE_NUMBER}}|${{ github.event.issue.number }}|g" | \
-            sed "s|{{ISSUE_TITLE}}|${{ github.event.issue.title }}|g")
-
-          # Inject issue body (multiline safe)
-          ISSUE_BODY=$(cat <<'ISSUE_BODY_EOF'
+          # Write issue body to file (heredoc handles multiline properly)
+          cat > "$ISSUE_BODY_FILE" <<'ISSUE_BODY_EOF'
           ${{ github.event.issue.body }}
           ISSUE_BODY_EOF
-          )
-          PROMPT=$(echo "$PROMPT" | sed "s|{{ISSUE_BODY}}|$ISSUE_BODY|g")
+
+          # Build prompt from template (simple substitutions first)
+          sed -e "s|{{REPO}}|${{ github.repository }}|g" \
+              -e "s|{{ISSUE_NUMBER}}|${{ github.event.issue.number }}|g" \
+              -e "s|{{ISSUE_TITLE}}|${{ github.event.issue.title }}|g" \
+              "$PROMPT_FILE" > "$TEMP_PROMPT"
+
+          # Replace {{ISSUE_BODY}} with file contents using perl (multiline-safe)
+          perl -i -0777 -pe '
+            open(my $fh, "<", "'"$ISSUE_BODY_FILE"'") or die "Cannot open body file: $!";
+            my $body = do { local $/; <$fh> };
+            close($fh);
+            s/\{\{ISSUE_BODY\}\}/$body/g;
+          ' "$TEMP_PROMPT"
+
+          PROMPT=$(cat "$TEMP_PROMPT")
 
           # Run Claude with JSON output
           claude -p --dangerously-skip-permissions --output-format json \
             "$PROMPT" > "$CLAUDE_OUTPUT" 2>&1 || true
+
+          # Cleanup temp files
+          rm -f "$TEMP_PROMPT" "$ISSUE_BODY_FILE"
 
           END_TIME=$(date +%s)
           DURATION_MS=$(( (END_TIME - START_TIME) * 1000 ))
